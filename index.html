@@ -1477,11 +1477,35 @@ function roundRect(ctx2, x, y, w, h, r) {
 
 function handlePhotos(e) {
   const files = Array.from(e.target.files);
-  const bonNum = document.getElementById('bon-num-display').textContent || 'BL-????';
+  const bonNum = document.getElementById('bon-num-display').textContent || 'PA-????';
   files.forEach(file => {
     const photoIndex = photos.length + 1;
-    compressAndWatermark(file, 1200, 0.75, bonNum, photoIndex, compressed => {
-      photos.push(compressed);
+    compressAndWatermark(file, 1200, 0.75, bonNum, photoIndex, async compressed => {
+      // Stocker en local d'abord pour affichage immédiat
+      const photoObj = { src: compressed, url: null, uploading: true, name: `${bonNum}_photo_${String(photoIndex).padStart(2,'0')}.jpg` };
+      photos.push(photoObj);
+      renderPhotoGrid();
+
+      // Upload vers Supabase Storage
+      if (supa && supaReady) {
+        try {
+          // Convertir base64 en blob
+          const res = await fetch(compressed);
+          const blob = await res.blob();
+          const path = `${bonNum}/${photoObj.name}`;
+          const { error } = await supa.storage.from('photos').upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+          if (error) throw error;
+          // Récupérer l'URL publique
+          const { data } = supa.storage.from('photos').getPublicUrl(path);
+          photoObj.url = data.publicUrl;
+          photoObj.uploading = false;
+        } catch(err) {
+          console.error('Erreur upload photo:', err);
+          photoObj.uploading = false;
+        }
+      } else {
+        photoObj.uploading = false;
+      }
       renderPhotoGrid();
     });
   });
@@ -1489,9 +1513,9 @@ function handlePhotos(e) {
 }
 
 function renderPhotoGrid() {
-  const grid = document.getElementById('photo-grid');
-  const noPhoto = document.getElementById('no-photo');
-  const dlBtn = document.getElementById('btn-dl-photos');
+  const grid     = document.getElementById('photo-grid');
+  const noPhoto  = document.getElementById('no-photo');
+  const dlBtn    = document.getElementById('btn-dl-photos');
   const photoCount = document.getElementById('photo-count-info');
 
   if (!photos.length) {
@@ -1508,31 +1532,45 @@ function renderPhotoGrid() {
     photoCount.textContent = `📎 ${photos.length} photo(s) en pièce jointe — non incluse(s) dans le PDF`;
   }
 
-  grid.innerHTML = photos.map((src, i) => {
-    // Estimer la taille en Ko
-    const kb = Math.round((src.length * 3/4) / 1024);
+  grid.innerHTML = photos.map((p, i) => {
+    const src = p.src || p; // compatibilité ancien format (string base64)
+    const kb  = Math.round((src.length * 3/4) / 1024);
+    const uploadBadge = p.uploading
+      ? `<div class="photo-size" style="background:rgba(37,99,235,0.8)">⏳</div>`
+      : p.url
+        ? `<div class="photo-size" style="background:rgba(22,163,74,0.85)">☁️</div>`
+        : `<div class="photo-size">${kb} Ko</div>`;
     return `
     <div class="photo-thumb">
       <img src="${src}" alt="Photo ${i+1}">
       <button class="del-btn" onclick="removePhoto(${i})">✕</button>
-      <div class="photo-size">${kb} Ko</div>
+      ${uploadBadge}
     </div>`;
   }).join('');
 }
 
-function removePhoto(i) {
+async function removePhoto(i) {
+  const p = photos[i];
+  // Supprimer de Supabase Storage si uploadée
+  if (supa && supaReady && p.url) {
+    try {
+      const bonNum = document.getElementById('bon-num-display').textContent || 'PA-????';
+      await supa.storage.from('photos').remove([`${bonNum}/${p.name}`]);
+    } catch(err) { console.error('Erreur suppression photo:', err); }
+  }
   photos.splice(i, 1);
   renderPhotoGrid();
 }
 
-// Télécharger toutes les photos une par une
+// Télécharger toutes les photos
 function downloadAllPhotos() {
   if (!photos.length) return;
-  const bonNum = document.getElementById('bon-num-display').textContent || 'BL';
-  photos.forEach((src, i) => {
+  photos.forEach((p, i) => {
+    const src = p.src || p;
+    const name = p.name || `photo_${String(i+1).padStart(2,'0')}.jpg`;
     const a = document.createElement('a');
     a.href = src;
-    a.download = `${bonNum}_photo_${String(i+1).padStart(2,'0')}.jpg`;
+    a.download = name;
     a.click();
   });
   toast(`${photos.length} photo(s) téléchargée(s)`);
@@ -1657,7 +1695,7 @@ async function saveBon() {
     tracabilite: document.getElementById('tracabiliteCheck').checked,
     tracabiliteQty: document.getElementById('tracabiliteCheck').checked
       ? document.getElementById('tracabiliteQty').value : '',
-    photos,
+    photos: photos.map(p => ({ src: p.src || p, url: p.url || null, name: p.name || '' })),
     signature: sigData
   };
 
@@ -1727,7 +1765,11 @@ function editBon(i) {
   document.getElementById('tracabiliteCheck').checked = bon.tracabilite || false;
   document.getElementById('tracabiliteQtyWrap').style.display = bon.tracabilite ? 'flex' : 'none';
   document.getElementById('tracabiliteQty').value = bon.tracabiliteQty || '';
-  photos = bon.photos ? [...bon.photos] : [];
+  // Restaurer les photos — utilise l'URL Supabase si dispo, sinon base64 local
+  photos = (bon.photos || []).map(p => {
+    if (typeof p === 'string') return { src: p, url: null, name: '' };
+    return { src: p.url || p.src || '', url: p.url || null, name: p.name || '' };
+  });
   renderPhotoGrid();
   loadArticles(bon.articles || []);
   // Restaurer la signature après que le canvas soit visible
