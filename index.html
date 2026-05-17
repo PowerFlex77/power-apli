@@ -915,12 +915,13 @@
     <p style="font-size:0.83rem;color:var(--text2);margin-bottom:14px">
       Importez votre catalogue depuis un fichier Excel. Le fichier doit contenir les colonnes : <strong>Référence, Désignation, Prix unitaire</strong>.
     </p>
-    <div style="display:flex;gap:10px;align-items:center">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn-import" onclick="document.getElementById('catalogueInput').click()">
         📊 Importer catalogue
       </button>
       <input type="file" id="catalogueInput" accept=".xlsx,.xls,.csv" onchange="importCatalogue(event)" style="display:none">
       <button class="btn-icon" onclick="exportCatalogueTemplate()" title="Télécharger modèle">📥 Modèle</button>
+      <button class="btn-icon" onclick="deleteAllCatalogue()" title="Vider le catalogue" style="color:#cc3333;border-color:#cc3333">🗑️ Tout supprimer</button>
     </div>
     <div style="margin-top:16px" id="catalogue-list"></div>
   </div>
@@ -1341,6 +1342,25 @@ function exportCatalogueTemplate() {
   XLSX.utils.book_append_sheet(wb, ws, 'Catalogue');
   XLSX.writeFile(wb, 'modele_catalogue.xlsx');
   toast('Modèle téléchargé');
+}
+
+async function deleteAllCatalogue() {
+  if (!confirm(`Supprimer les ${catalogue.length} article(s) du catalogue ?`)) return;
+  showSyncStatus('🗑️ Suppression…', 'loading');
+  try {
+    if (supa && supaReady) {
+      const { error } = await supa.from('catalogue').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+      if (error) throw error;
+      showSyncStatus('✅ Catalogue vidé', 'ok');
+    }
+  } catch(err) {
+    console.error('Erreur suppression catalogue:', err);
+    showSyncStatus('📴 Supprimé localement', 'offline');
+  }
+  catalogue = [];
+  localStorage.setItem('bl_catalogue', JSON.stringify(catalogue));
+  renderCatalogue();
+  toast('Catalogue vidé ✓');
 }
 
 // ── Helpers ──────────────────────────────────────────────────
