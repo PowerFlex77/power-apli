@@ -1124,7 +1124,7 @@ function importCatalogue(e) {
       if (row[0] || row[1]) newItems.push({
         ref: String(row[0]||'').trim(),
         des: String(row[1]||'').trim(),
-        pu:  parseFloat(row[2]) || 0
+        pu:  parseFloat(String(row[2]||'0').replace(',', '.')) || 0
       });
     });
 
