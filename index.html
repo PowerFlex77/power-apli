@@ -6,7 +6,7 @@
 <title>Bon de Livraison</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.0/dist/umd/supabase.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
@@ -934,7 +934,14 @@
 // ============================================================
 const SUPA_URL = 'https://uferrhltvcfwmnnkgzxf.supabase.co';
 const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVmZXJyaGx0dmNmd21ubmtnenhmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwMzQzMzYsImV4cCI6MjA5NDYxMDMzNn0.N7km-a5xiLvLB3XRFsfVYacBKsMleztcfDzQFEpcA4Q';
-const supa = supabase.createClient(SUPA_URL, SUPA_KEY);
+let supa = null;
+try {
+  // La librairie expose soit supabase.createClient soit window.supabase.createClient
+  const lib = window.supabase || supabase;
+  supa = lib.createClient(SUPA_URL, SUPA_KEY);
+} catch(e) {
+  console.warn('Supabase librairie non chargée:', e);
+}
 
 // ============================================================
 // ÉTAT LOCAL (cache + fallback offline)
@@ -950,6 +957,17 @@ let supaReady = false;
 // ============================================================
 async function loadFromSupabase() {
   showSyncStatus('⏳ Synchronisation…', 'loading');
+
+  if (!supa) {
+    console.warn('Client Supabase non initialisé, mode local');
+    showSyncStatus('📴 Mode hors ligne', 'offline');
+    supaReady = false;
+    renderBonsList();
+    renderCatalogue();
+    initNewBon();
+    return;
+  }
+
   try {
     // Charger les bons
     const { data: bonsData, error: bonsErr } = await supa
@@ -1058,13 +1076,16 @@ function updateTotals() {
   document.querySelectorAll('#articles-body tr').forEach(tr => {
     const inputs = tr.querySelectorAll('input');
     const qty = parseFloat(inputs[2]?.value) || 0;
-    const pu = parseFloat(inputs[3]?.value) || 0;
+    const pu  = parseFloat(inputs[3]?.value) || 0;
     const line = qty * pu;
     total += line;
-    tr.querySelector('.line-total').textContent = line.toFixed(2).replace('.', ',') + ' €';
+    const lt = tr.querySelector('.line-total');
+    if (lt) lt.textContent = line.toFixed(2).replace('.', ',') + ' €';
   });
-  document.getElementById('total-ht').textContent = total.toFixed(2).replace('.', ',') + ' €';
-  document.getElementById('art-count').textContent = document.querySelectorAll('#articles-body tr').length;
+  const totalEl = document.getElementById('total-ht');
+  if (totalEl) totalEl.textContent = total.toFixed(2).replace('.', ',') + ' €';
+  const countEl = document.getElementById('art-count');
+  if (countEl) countEl.textContent = document.querySelectorAll('#articles-body tr').length;
 }
 
 function getArticles() {
