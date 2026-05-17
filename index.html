@@ -1111,25 +1111,21 @@ function loadArticles(arr) {
 // ============================================================
 // CATALOGUE — import, recherche, sélection avec modal quantité
 // ============================================================
-// Parse un prix depuis Excel : gère "6,21" / "6.21" / nombre brut
+function parseRef(val) {
+  if (val === null || val === undefined || val === '') return '';
+  if (typeof val === 'number') return String(Math.round(val));
+  return String(val).trim();
+}
+
 function parsePrix(val) {
   if (val === null || val === undefined || val === '') return 0;
-  // Si c'est déjà un nombre (Excel stocke parfois directement un float)
   if (typeof val === 'number') return val;
-  // Sinon c'est une string : on nettoie
-  let s = String(val).trim();
-  // Supprimer les espaces et symboles monétaires
-  s = s.replace(/[€$£\s]/g, '');
-  // Cas "1.234,56" (format FR avec séparateur milliers)
+  let s = String(val).trim().replace(/[€$£\s]/g, '');
   if (s.match(/^\d{1,3}(\.\d{3})+(,\d+)?$/)) {
     s = s.replace(/\./g, '').replace(',', '.');
-  }
-  // Cas "1,234.56" (format EN avec séparateur milliers)
-  else if (s.match(/^\d{1,3}(,\d{3})+(\.\d+)?$/)) {
+  } else if (s.match(/^\d{1,3}(,\d{3})+(\.\d+)?$/)) {
     s = s.replace(/,/g, '');
-  }
-  // Cas simple "6,21" → "6.21"
-  else {
+  } else {
     s = s.replace(',', '.');
   }
   return parseFloat(s) || 0;
@@ -1139,9 +1135,10 @@ function importCatalogue(e) {
   const file = e.target.files[0]; if (!file) return;
   const reader = new FileReader();
   reader.onload = async function(ev) {
-    const wb = XLSX.read(ev.target.result, {type:'binary'});
+    // raw:false force tout en string → évite qu'Excel convertisse les refs en float
+    const wb = XLSX.read(ev.target.result, { type: 'binary' });
     const ws = wb.Sheets[wb.SheetNames[0]];
-    const data = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+    const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false });
     const newItems = [];
     data.forEach((row, i) => {
       if (i === 0) return;
