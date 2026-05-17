@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Bon de Livraison</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
@@ -280,6 +281,32 @@
     display: flex; align-items: center; justify-content: center;
   }
 
+  .photo-size {
+    position: absolute;
+    bottom: 4px; left: 4px;
+    background: rgba(0,0,0,0.55);
+    color: white;
+    font-size: 0.62rem;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  /* PRINT — exclure toute la section photos */
+  @media print {
+    #photos-section { display: none !important; }
+    .print-photos-note {
+      display: block !important;
+      font-size: 0.82rem;
+      color: #555;
+      border: 1px dashed #aaa;
+      border-radius: 6px;
+      padding: 8px 12px;
+      margin-bottom: 14px;
+    }
+  }
+  .print-photos-note { display: none; }
+
   /* ARTICLES TABLE */
   .articles-header {
     display: flex;
@@ -513,7 +540,8 @@
   @media print {
     body { background: white; padding: 0; }
     .app-header, .tabs, .btn-generate, .btn-photo, .btn-add-row,
-    .sig-actions, .del-row-btn, .btn-import, .photo-btns { display: none !important; }
+    .sig-actions, .del-row-btn, .btn-import, .photo-btns,
+    #btn-dl-photos, #photo-count-info { display: none !important; }
     .page { display: block !important; padding: 10px; }
     .section-card { box-shadow: none; border: 1px solid #ccc; }
     .tabs, .tab { display: none; }
@@ -686,8 +714,8 @@
   </div>
 
   <!-- PHOTOS -->
-  <div class="section-card">
-    <div class="section-title">Photos</div>
+  <div class="section-card" id="photos-section">
+    <div class="section-title">Photos <span style="font-size:0.65rem;font-weight:400;color:var(--text2);text-transform:none;letter-spacing:0">(pièces jointes — hors PDF)</span></div>
     <div class="photo-btns">
       <button class="btn-photo camera" onclick="document.getElementById('cameraInput').click()">
         📷 Appareil photo
@@ -698,11 +726,21 @@
     </div>
     <input type="file" id="cameraInput" accept="image/*" capture="environment" onchange="handlePhotos(event)">
     <input type="file" id="photoInput" accept="image/*" multiple onchange="handlePhotos(event)">
+
+    <!-- Info pièce jointe (hors impression) -->
+    <div id="photo-count-info" style="display:none;font-size:0.78rem;color:var(--accent2);background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:7px 10px;margin-bottom:8px;"></div>
+
     <div class="photo-grid" id="photo-grid"></div>
     <div id="no-photo" style="text-align:center;color:var(--text2);font-size:0.82rem;padding:14px 0;">Aucune photo ajoutée</div>
+
+    <!-- Bouton téléchargement séparé -->
+    <button id="btn-dl-photos" class="btn-generate" style="background:var(--accent2);margin-top:10px;font-size:0.85rem;padding:11px;display:none" onclick="downloadAllPhotos()">
+      📎 &nbsp; Télécharger les photos séparément
+    </button>
   </div>
 
-  <!-- SIGNATURE -->
+  <!-- Note visible uniquement à l'impression, à la place des photos -->
+  <div class="print-photos-note" id="print-photos-note"></div>
   <div class="section-card">
     <div class="section-title">Signature client</div>
     <canvas class="sig-canvas" id="sigCanvas"></canvas>
@@ -750,12 +788,11 @@
 
 <script>
 // ============================================================
-// STATE
+// INIT
 // ============================================================
 let bons = JSON.parse(localStorage.getItem('bl_bons') || '[]');
 let catalogue = JSON.parse(localStorage.getItem('bl_catalogue') || '[]');
-let photos = []; // base64 strings for current bon
-let sigData = null;
+let photos = [];
 let editingIndex = -1;
 
 // ============================================================
@@ -775,7 +812,7 @@ function switchTab(name) {
 // ============================================================
 function nextBonNum() {
   const n = bons.length + 1;
-  return 'BL-' + String(n).padStart(4, '0');
+  return 'PA-' + String(n).padStart(4, '0');
 }
 
 function initNewBon() {
@@ -927,17 +964,96 @@ function exportCatalogueTemplate() {
 }
 
 // ============================================================
-// PHOTOS
+// PHOTOS — compression + séparation PDF
 // ============================================================
+
+// Compression + filigrane BL
+function compressAndWatermark(file, maxPx, quality, bonNum, photoIndex, callback) {
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const img = new Image();
+    img.onload = () => {
+      // Redimensionnement
+      let w = img.width, h = img.height;
+      if (w > maxPx || h > maxPx) {
+        if (w > h) { h = Math.round(h * maxPx / w); w = maxPx; }
+        else       { w = Math.round(w * maxPx / h); h = maxPx; }
+      }
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx2 = c.getContext('2d');
+      ctx2.drawImage(img, 0, 0, w, h);
+
+      // --- Filigrane ---
+      const now = new Date();
+      const dateStr = now.toLocaleDateString('fr-FR') + ' ' + now.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
+      const line1 = bonNum;
+      const line2 = `Photo ${String(photoIndex).padStart(2,'0')} · ${dateStr}`;
+
+      const fontSize = Math.max(16, Math.round(w * 0.032));
+      const pad = Math.round(fontSize * 0.6);
+
+      ctx2.font = `bold ${fontSize}px IBM Plex Mono, monospace`;
+      const w1 = ctx2.measureText(line1).width;
+      ctx2.font = `${Math.round(fontSize * 0.78)}px IBM Plex Mono, monospace`;
+      const w2 = ctx2.measureText(line2).width;
+      const boxW = Math.max(w1, w2) + pad * 2;
+      const boxH = fontSize + Math.round(fontSize * 0.78) + pad * 2 + Math.round(fontSize * 0.3);
+
+      const x = w - boxW - Math.round(w * 0.02);
+      const y = h - boxH - Math.round(h * 0.02);
+
+      // Fond semi-transparent
+      ctx2.fillStyle = 'rgba(0, 0, 0, 0.52)';
+      roundRect(ctx2, x, y, boxW, boxH, 6);
+      ctx2.fill();
+
+      // Trait accent orange en haut du bloc
+      ctx2.fillStyle = '#E8500A';
+      roundRect(ctx2, x, y, boxW, 4, 2);
+      ctx2.fill();
+
+      // Texte ligne 1 — numéro BL
+      ctx2.fillStyle = '#FFFFFF';
+      ctx2.font = `bold ${fontSize}px IBM Plex Mono, monospace`;
+      ctx2.fillText(line1, x + pad, y + pad + fontSize);
+
+      // Texte ligne 2 — photo + date
+      ctx2.fillStyle = 'rgba(255,255,255,0.75)';
+      ctx2.font = `${Math.round(fontSize * 0.78)}px IBM Plex Mono, monospace`;
+      ctx2.fillText(line2, x + pad, y + pad + fontSize + Math.round(fontSize * 0.3) + Math.round(fontSize * 0.78));
+
+      callback(c.toDataURL('image/jpeg', quality));
+    };
+    img.src = ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+// Helper pour coins arrondis sur canvas
+function roundRect(ctx2, x, y, w, h, r) {
+  ctx2.beginPath();
+  ctx2.moveTo(x + r, y);
+  ctx2.lineTo(x + w - r, y);
+  ctx2.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx2.lineTo(x + w, y + h - r);
+  ctx2.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx2.lineTo(x + r, y + h);
+  ctx2.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx2.lineTo(x, y + r);
+  ctx2.quadraticCurveTo(x, y, x + r, y);
+  ctx2.closePath();
+}
+
 function handlePhotos(e) {
   const files = Array.from(e.target.files);
+  const bonNum = document.getElementById('bon-num-display').textContent || 'BL-????';
   files.forEach(file => {
-    const reader = new FileReader();
-    reader.onload = ev => {
-      photos.push(ev.target.result);
+    const photoIndex = photos.length + 1;
+    compressAndWatermark(file, 1200, 0.75, bonNum, photoIndex, compressed => {
+      photos.push(compressed);
       renderPhotoGrid();
-    };
-    reader.readAsDataURL(file);
+    });
   });
   e.target.value = '';
 }
@@ -945,14 +1061,33 @@ function handlePhotos(e) {
 function renderPhotoGrid() {
   const grid = document.getElementById('photo-grid');
   const noPhoto = document.getElementById('no-photo');
-  if (!photos.length) { grid.innerHTML = ''; noPhoto.style.display = 'block'; return; }
+  const dlBtn = document.getElementById('btn-dl-photos');
+  const photoCount = document.getElementById('photo-count-info');
+
+  if (!photos.length) {
+    grid.innerHTML = '';
+    noPhoto.style.display = 'block';
+    if (dlBtn) dlBtn.style.display = 'none';
+    if (photoCount) photoCount.style.display = 'none';
+    return;
+  }
   noPhoto.style.display = 'none';
-  grid.innerHTML = photos.map((src, i) => `
+  if (dlBtn) dlBtn.style.display = 'flex';
+  if (photoCount) {
+    photoCount.style.display = 'block';
+    photoCount.textContent = `📎 ${photos.length} photo(s) en pièce jointe — non incluse(s) dans le PDF`;
+  }
+
+  grid.innerHTML = photos.map((src, i) => {
+    // Estimer la taille en Ko
+    const kb = Math.round((src.length * 3/4) / 1024);
+    return `
     <div class="photo-thumb">
       <img src="${src}" alt="Photo ${i+1}">
       <button class="del-btn" onclick="removePhoto(${i})">✕</button>
-    </div>
-  `).join('');
+      <div class="photo-size">${kb} Ko</div>
+    </div>`;
+  }).join('');
 }
 
 function removePhoto(i) {
@@ -960,48 +1095,74 @@ function removePhoto(i) {
   renderPhotoGrid();
 }
 
-// ============================================================
-// SIGNATURE
-// ============================================================
-const canvas = document.getElementById('sigCanvas');
-const ctx = canvas.getContext('2d');
-let drawing = false;
-
-function resizeCanvas() {
-  const rect = canvas.getBoundingClientRect();
-  canvas.width = rect.width * window.devicePixelRatio;
-  canvas.height = rect.height * window.devicePixelRatio;
-  ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-  ctx.strokeStyle = '#1A1A2E';
-  ctx.lineWidth = 2;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
+// Télécharger toutes les photos une par une
+function downloadAllPhotos() {
+  if (!photos.length) return;
+  const bonNum = document.getElementById('bon-num-display').textContent || 'BL';
+  photos.forEach((src, i) => {
+    const a = document.createElement('a');
+    a.href = src;
+    a.download = `${bonNum}_photo_${String(i+1).padStart(2,'0')}.jpg`;
+    a.click();
+  });
+  toast(`${photos.length} photo(s) téléchargée(s)`);
 }
 
-resizeCanvas();
-window.addEventListener('resize', resizeCanvas);
+// ============================================================
+// SIGNATURE — init différé après affichage de la page
+// ============================================================
+let sigCanvas, sigCtx, sigDrawing = false, sigData = null;
 
-function getPos(e) {
-  const rect = canvas.getBoundingClientRect();
-  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
-  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-  return { x: clientX - rect.left, y: clientY - rect.top };
+function initSignature() {
+  sigCanvas = document.getElementById('sigCanvas');
+  if (!sigCanvas) return;
+  sigCtx = sigCanvas.getContext('2d');
+  setupCanvas();
+
+  sigCanvas.addEventListener('mousedown',  e => { sigDrawing = true; const p = getSigPos(e); sigCtx.beginPath(); sigCtx.moveTo(p.x, p.y); e.preventDefault(); });
+  sigCanvas.addEventListener('mousemove',  e => { if (!sigDrawing) return; const p = getSigPos(e); sigCtx.lineTo(p.x, p.y); sigCtx.stroke(); e.preventDefault(); });
+  sigCanvas.addEventListener('mouseup',    e => { sigDrawing = false; sigData = sigCanvas.toDataURL(); e.preventDefault(); });
+  sigCanvas.addEventListener('mouseleave', e => { sigDrawing = false; });
+  sigCanvas.addEventListener('touchstart', e => { e.preventDefault(); sigDrawing = true; const p = getSigPos(e); sigCtx.beginPath(); sigCtx.moveTo(p.x, p.y); }, {passive:false});
+  sigCanvas.addEventListener('touchmove',  e => { e.preventDefault(); if (!sigDrawing) return; const p = getSigPos(e); sigCtx.lineTo(p.x, p.y); sigCtx.stroke(); }, {passive:false});
+  sigCanvas.addEventListener('touchend',   e => { sigDrawing = false; sigData = sigCanvas.toDataURL(); });
 }
 
-canvas.addEventListener('mousedown', e => { drawing = true; const p = getPos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); });
-canvas.addEventListener('mousemove', e => { if (!drawing) return; const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); });
-canvas.addEventListener('mouseup', () => { drawing = false; sigData = canvas.toDataURL(); });
-canvas.addEventListener('touchstart', e => { e.preventDefault(); drawing = true; const p = getPos(e); ctx.beginPath(); ctx.moveTo(p.x, p.y); }, {passive:false});
-canvas.addEventListener('touchmove', e => { e.preventDefault(); if (!drawing) return; const p = getPos(e); ctx.lineTo(p.x, p.y); ctx.stroke(); }, {passive:false});
-canvas.addEventListener('touchend', () => { drawing = false; sigData = canvas.toDataURL(); });
+function setupCanvas() {
+  if (!sigCanvas) return;
+  const rect = sigCanvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  sigCanvas.width  = rect.width  * dpr;
+  sigCanvas.height = rect.height * dpr;
+  sigCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  sigCtx.strokeStyle = '#1A1A2E';
+  sigCtx.lineWidth   = 2.5;
+  sigCtx.lineCap     = 'round';
+  sigCtx.lineJoin    = 'round';
+}
+
+function getSigPos(e) {
+  const rect = sigCanvas.getBoundingClientRect();
+  const src  = e.touches ? e.touches[0] : e;
+  return { x: src.clientX - rect.left, y: src.clientY - rect.top };
+}
 
 function clearSignature() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!sigCtx) return;
+  sigCtx.clearRect(0, 0, sigCanvas.width, sigCanvas.height);
   sigData = null;
 }
 
 // ============================================================
-// SAVE & LOAD BON
+// EMAILJS CONFIG
+// ⚠️ Remplacez ces 3 valeurs par les vôtres sur emailjs.com
+// ============================================================
+const EMAILJS_PUBLIC_KEY  = 'VOTRE_PUBLIC_KEY';   // Account > API Keys
+const EMAILJS_SERVICE_ID  = 'VOTRE_SERVICE_ID';   // Email Services
+const EMAILJS_TEMPLATE_ID = 'VOTRE_TEMPLATE_ID';  // Email Templates
+
+// ============================================================
+// SAVE & ENVOI MAIL
 // ============================================================
 function saveBon() {
   const clientNom = document.getElementById('clientNom').value.trim();
@@ -1031,14 +1192,90 @@ function saveBon() {
 
   if (editingIndex >= 0) {
     bons[editingIndex] = bon;
-    toast('Bon modifié ✓');
   } else {
     bons.push(bon);
-    toast('Bon enregistré ✓');
   }
   localStorage.setItem('bl_bons', JSON.stringify(bons));
+
+  // Envoi par mail
+  sendByEmail(bon);
+
   initNewBon();
   switchTab('bons');
+}
+
+function buildArticlesText(articles) {
+  if (!articles || !articles.length) return 'Aucun article';
+  return articles.map(a => {
+    const total = (parseFloat(a.qty)||0) * (parseFloat(a.pu)||0);
+    return `• [${a.ref||'—'}] ${a.des||'—'}  ×${a.qty}  ${parseFloat(a.pu||0).toFixed(2)} € = ${total.toFixed(2)} €`;
+  }).join('\n');
+}
+
+function sendByEmail(bon) {
+  const d = bon.dateIntervention ? new Date(bon.dateIntervention).toLocaleDateString('fr-FR') : '—';
+  const total = (bon.articles||[]).reduce((s,a) => s + (parseFloat(a.qty)||0)*(parseFloat(a.pu)||0), 0);
+
+  const templateParams = {
+    to_email:     'contact@power-flex.fr',
+    bon_num:      bon.num,
+    client_nom:   bon.clientNom,
+    client_adresse: bon.clientAdresse || '—',
+    date_intervention: d,
+    technicien:   bon.technicien || '—',
+    nature_panne: bon.naturePanne || '—',
+    description:  bon.descIntervention || '—',
+    marque:       bon.materielMarque || '—',
+    modele:       bon.materielModele || '—',
+    serie:        bon.materielSerie  || '—',
+    rel_km:       bon.relKm   ? bon.relKm   + ' km' : '—',
+    rel_heure:    bon.relHeure ? bon.relHeure + ' h'  : '—',
+    articles:     buildArticlesText(bon.articles),
+    total_ht:     total.toFixed(2) + ' €',
+    observations: bon.observations || '—',
+    nb_photos:    bon.photos ? bon.photos.length : 0,
+    signature:    bon.signature ? '[Signature présente]' : '[Pas de signature]',
+  };
+
+  // Vérif config
+  if (EMAILJS_PUBLIC_KEY === 'VOTRE_PUBLIC_KEY') {
+    toast('⚠️ EmailJS non configuré — bon sauvegardé localement');
+    showEmailjsSetupBanner();
+    return;
+  }
+
+  emailjs.init(EMAILJS_PUBLIC_KEY);
+  toast('📧 Envoi en cours…');
+
+  emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, templateParams)
+    .then(() => toast('✅ Bon envoyé à contact@power-flex.fr'))
+    .catch(err => {
+      console.error('EmailJS error:', err);
+      toast('❌ Échec envoi mail — bon sauvegardé quand même');
+    });
+}
+
+function showEmailjsSetupBanner() {
+  const existing = document.getElementById('emailjs-banner');
+  if (existing) return;
+  const banner = document.createElement('div');
+  banner.id = 'emailjs-banner';
+  banner.style.cssText = `
+    position:fixed;bottom:80px;left:12px;right:12px;
+    background:#1e3a5f;color:white;border-radius:10px;
+    padding:14px 16px;font-size:0.82rem;line-height:1.6;
+    z-index:9999;box-shadow:0 4px 20px rgba(0,0,0,0.3);
+  `;
+  banner.innerHTML = `
+    <strong style="font-size:0.9rem">⚙️ Configurer l'envoi mail</strong><br>
+    1. Créez un compte gratuit sur <a href="https://emailjs.com" target="_blank" style="color:#93c5fd">emailjs.com</a><br>
+    2. Ajoutez un service Gmail/SMTP → copiez le <b>Service ID</b><br>
+    3. Créez un template → copiez le <b>Template ID</b><br>
+    4. Account &gt; API Keys → copiez la <b>Public Key</b><br>
+    5. Remplacez les 3 valeurs dans le fichier HTML (lignes EMAILJS_…)<br>
+    <button onclick="document.getElementById('emailjs-banner').remove()" style="margin-top:8px;background:#E8500A;border:none;color:white;padding:5px 14px;border-radius:5px;cursor:pointer;font-family:inherit">Fermer</button>
+  `;
+  document.body.appendChild(banner);
 }
 
 function editBon(i) {
@@ -1065,7 +1302,10 @@ function editBon(i) {
   clearSignature();
   if (bon.signature) {
     const img = new Image();
-    img.onload = () => { ctx.drawImage(img, 0, 0, canvas.width / window.devicePixelRatio, canvas.height / window.devicePixelRatio); };
+    img.onload = () => {
+      const dpr = window.devicePixelRatio || 1;
+      sigCtx.drawImage(img, 0, 0, sigCanvas.width / dpr, sigCanvas.height / dpr);
+    };
     img.src = bon.signature;
     sigData = bon.signature;
   }
@@ -1109,12 +1349,32 @@ function renderBonsList() {
 // PRINT
 // ============================================================
 function printBon() {
-  window.print();
+  // Met à jour la note pièces jointes dans le PDF
+  const note = document.getElementById('print-photos-note');
+  if (note) {
+    if (photos.length > 0) {
+      const bonNum = document.getElementById('bon-num-display').textContent || 'BL';
+      note.textContent = `📎 Ce bon comporte ${photos.length} photo(s) en pièce jointe (fichiers séparés : ${bonNum}_photo_01.jpg, …).`;
+    } else {
+      note.textContent = '';
+    }
+  }
+  // Proposer de télécharger les photos d'abord
+  if (photos.length > 0) {
+    if (confirm(`📎 ${photos.length} photo(s) détectée(s).\n\nVoulez-vous télécharger les photos séparément avant d'imprimer le PDF ?`)) {
+      downloadAllPhotos();
+      setTimeout(() => window.print(), 600);
+    } else {
+      window.print();
+    }
+  } else {
+    window.print();
+  }
 }
 
 function printBonByIndex(i) {
   editBon(i);
-  setTimeout(() => window.print(), 300);
+  setTimeout(() => printBon(), 400);
 }
 
 // ============================================================
@@ -1128,11 +1388,15 @@ function toast(msg) {
 }
 
 // ============================================================
-// INIT
+// DÉMARRAGE
 // ============================================================
-initNewBon();
-renderBonsList();
-renderCatalogue();
+document.addEventListener('DOMContentLoaded', () => {
+  initNewBon();
+  renderBonsList();
+  renderCatalogue();
+  initSignature();
+  window.addEventListener('resize', () => { setupCanvas(); });
+});
 </script>
 </body>
 </html>
