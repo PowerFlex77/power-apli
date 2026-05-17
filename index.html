@@ -1318,8 +1318,8 @@ function openQtyModal(catalogueIndex) {
       <h3>${escHtml(a.des)}</h3>
       <div class="modal-ref">${escHtml(a.ref)}</div>
       <div class="modal-pu">Prix unitaire : ${parseFloat(a.pu).toFixed(2)} €</div>
-      <input type="number" id="modal-qty-input" value="0" min="0" step="1"
-        inputmode="numeric" pattern="[0-9]*"
+      <input type="number" id="modal-qty-input" value="0" min="0" step="any"
+        inputmode="decimal" pattern="[0-9]*"
         onkeydown="if(event.key==='Enter') confirmQtyModal(${catalogueIndex})">
       <div class="qty-modal-btns">
         <button class="btn-cancel" onclick="closeQtyModal()">Annuler</button>
