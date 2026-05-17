@@ -1111,6 +1111,30 @@ function loadArticles(arr) {
 // ============================================================
 // CATALOGUE — import, recherche, sélection avec modal quantité
 // ============================================================
+// Parse un prix depuis Excel : gère "6,21" / "6.21" / nombre brut
+function parsePrix(val) {
+  if (val === null || val === undefined || val === '') return 0;
+  // Si c'est déjà un nombre (Excel stocke parfois directement un float)
+  if (typeof val === 'number') return val;
+  // Sinon c'est une string : on nettoie
+  let s = String(val).trim();
+  // Supprimer les espaces et symboles monétaires
+  s = s.replace(/[€$£\s]/g, '');
+  // Cas "1.234,56" (format FR avec séparateur milliers)
+  if (s.match(/^\d{1,3}(\.\d{3})+(,\d+)?$/)) {
+    s = s.replace(/\./g, '').replace(',', '.');
+  }
+  // Cas "1,234.56" (format EN avec séparateur milliers)
+  else if (s.match(/^\d{1,3}(,\d{3})+(\.\d+)?$/)) {
+    s = s.replace(/,/g, '');
+  }
+  // Cas simple "6,21" → "6.21"
+  else {
+    s = s.replace(',', '.');
+  }
+  return parseFloat(s) || 0;
+}
+
 function importCatalogue(e) {
   const file = e.target.files[0]; if (!file) return;
   const reader = new FileReader();
@@ -1124,7 +1148,7 @@ function importCatalogue(e) {
       if (row[0] || row[1]) newItems.push({
         ref: String(row[0]||'').trim(),
         des: String(row[1]||'').trim(),
-        pu:  parseFloat(String(row[2]||'0').replace(',', '.')) || 0
+        pu:  parsePrix(row[2])
       });
     });
 
