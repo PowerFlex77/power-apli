@@ -838,16 +838,63 @@
   <!-- TRAÇABILITÉ -->
   <div class="section-card">
     <div class="section-title">Traçabilité</div>
-    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem;font-weight:600;color:var(--text)">
-        <input type="checkbox" id="tracabiliteCheck" onchange="toggleTracabilite()" style="width:18px;height:18px;accent-color:var(--accent);cursor:pointer">
-        Traçabilité requise
-      </label>
-      <div id="tracabiliteQtyWrap" style="display:none;align-items:center;gap:8px">
-        <label style="font-size:0.82rem;color:var(--text2);font-weight:500">Quantité :</label>
-        <input type="number" id="tracabiliteQty" min="1" step="1" placeholder="0"
-          style="width:80px;background:var(--bg);border:1.5px solid var(--accent);border-radius:7px;padding:7px 10px;font-family:inherit;font-size:0.9rem;color:var(--text)">
+    <div style="display:flex;flex-direction:column;gap:12px">
+
+      <!-- Traçabilité requise -->
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem;font-weight:600;color:var(--text)">
+          <input type="checkbox" id="tracabiliteCheck" onchange="toggleTracabilite()" style="width:18px;height:18px;accent-color:var(--accent);cursor:pointer">
+          Traçabilité requise
+        </label>
+        <div id="tracabiliteQtyWrap" style="display:none;align-items:center;gap:8px">
+          <label style="font-size:0.82rem;color:var(--text2);font-weight:500">Qté :</label>
+          <input type="number" id="tracabiliteQty" min="1" step="1" placeholder="0"
+            style="width:72px;background:var(--bg);border:1.5px solid var(--accent);border-radius:7px;padding:7px 10px;font-family:inherit;font-size:0.9rem;color:var(--text)">
+        </div>
       </div>
+
+      <!-- Déplacement -->
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem;font-weight:600;color:var(--text)">
+          <input type="checkbox" id="deplacementCheck" style="width:18px;height:18px;accent-color:var(--accent);cursor:pointer">
+          Déplacement
+        </label>
+      </div>
+
+      <!-- Main-d'œuvre -->
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem;font-weight:600;color:var(--text)">
+          <input type="checkbox" id="mainOeuvreCheck" onchange="toggleMainOeuvre()" style="width:18px;height:18px;accent-color:var(--accent);cursor:pointer">
+          Main-d'œuvre
+        </label>
+        <div id="mainOeuvreQtyWrap" style="display:none;align-items:center;gap:8px">
+          <label style="font-size:0.82rem;color:var(--text2);font-weight:500">Qté :</label>
+          <input type="number" id="mainOeuvreQty" min="0.5" step="0.5" placeholder="0"
+            style="width:72px;background:var(--bg);border:1.5px solid var(--accent);border-radius:7px;padding:7px 10px;font-family:inherit;font-size:0.9rem;color:var(--text)">
+        </div>
+      </div>
+
+      <!-- Forfait astreinte -->
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem;font-weight:600;color:var(--text)">
+          <input type="checkbox" id="forfaitAstreinteCheck" style="width:18px;height:18px;accent-color:var(--accent);cursor:pointer">
+          Forfait astreinte
+        </label>
+      </div>
+
+      <!-- Main-d'œuvre astreinte -->
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:0.9rem;font-weight:600;color:var(--text)">
+          <input type="checkbox" id="mainOeuvreAstreinteCheck" onchange="toggleMainOeuvreAstreinte()" style="width:18px;height:18px;accent-color:var(--accent);cursor:pointer">
+          Main-d'œuvre astreinte
+        </label>
+        <div id="mainOeuvreAstreinteQtyWrap" style="display:none;align-items:center;gap:8px">
+          <label style="font-size:0.82rem;color:var(--text2);font-weight:500">Qté :</label>
+          <input type="number" id="mainOeuvreAstreinteQty" min="0.5" step="0.5" placeholder="0"
+            style="width:72px;background:var(--bg);border:1.5px solid var(--accent);border-radius:7px;padding:7px 10px;font-family:inherit;font-size:0.9rem;color:var(--text)">
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -1050,6 +1097,14 @@ function initNewBon() {
   document.getElementById('tracabiliteCheck').checked = false;
   document.getElementById('tracabiliteQtyWrap').style.display = 'none';
   document.getElementById('tracabiliteQty').value = '';
+  document.getElementById('deplacementCheck').checked = false;
+  document.getElementById('mainOeuvreCheck').checked = false;
+  document.getElementById('mainOeuvreQtyWrap').style.display = 'none';
+  document.getElementById('mainOeuvreQty').value = '';
+  document.getElementById('forfaitAstreinteCheck').checked = false;
+  document.getElementById('mainOeuvreAstreinteCheck').checked = false;
+  document.getElementById('mainOeuvreAstreinteQtyWrap').style.display = 'none';
+  document.getElementById('mainOeuvreAstreinteQty').value = '';
   photos = [];
   renderPhotoGrid();
   clearSignature();
@@ -1705,6 +1760,20 @@ function toggleTracabilite() {
   if (!checked) document.getElementById('tracabiliteQty').value = '';
 }
 
+function toggleMainOeuvre() {
+  const checked = document.getElementById('mainOeuvreCheck').checked;
+  const wrap    = document.getElementById('mainOeuvreQtyWrap');
+  wrap.style.display = checked ? 'flex' : 'none';
+  if (!checked) document.getElementById('mainOeuvreQty').value = '';
+}
+
+function toggleMainOeuvreAstreinte() {
+  const checked = document.getElementById('mainOeuvreAstreinteCheck').checked;
+  const wrap    = document.getElementById('mainOeuvreAstreinteQtyWrap');
+  wrap.style.display = checked ? 'flex' : 'none';
+  if (!checked) document.getElementById('mainOeuvreAstreinteQty').value = '';
+}
+
 // ============================================================
 // SAVE — Supabase + localStorage
 // ============================================================
@@ -1734,6 +1803,14 @@ async function saveBon() {
     tracabilite: document.getElementById('tracabiliteCheck').checked,
     tracabiliteQty: document.getElementById('tracabiliteCheck').checked
       ? document.getElementById('tracabiliteQty').value : '',
+    deplacement: document.getElementById('deplacementCheck').checked,
+    mainOeuvre: document.getElementById('mainOeuvreCheck').checked,
+    mainOeuvreQty: document.getElementById('mainOeuvreCheck').checked
+      ? document.getElementById('mainOeuvreQty').value : '',
+    forfaitAstreinte: document.getElementById('forfaitAstreinteCheck').checked,
+    mainOeuvreAstreinte: document.getElementById('mainOeuvreAstreinteCheck').checked,
+    mainOeuvreAstreinteQty: document.getElementById('mainOeuvreAstreinteCheck').checked
+      ? document.getElementById('mainOeuvreAstreinteQty').value : '',
     photos: photos.map(p => ({ src: p.src || p, url: p.url || null, name: p.name || '' })),
     signature: sigData
   };
@@ -1804,6 +1881,14 @@ function editBon(i) {
   document.getElementById('tracabiliteCheck').checked = bon.tracabilite || false;
   document.getElementById('tracabiliteQtyWrap').style.display = bon.tracabilite ? 'flex' : 'none';
   document.getElementById('tracabiliteQty').value = bon.tracabiliteQty || '';
+  document.getElementById('deplacementCheck').checked = bon.deplacement || false;
+  document.getElementById('mainOeuvreCheck').checked = bon.mainOeuvre || false;
+  document.getElementById('mainOeuvreQtyWrap').style.display = bon.mainOeuvre ? 'flex' : 'none';
+  document.getElementById('mainOeuvreQty').value = bon.mainOeuvreQty || '';
+  document.getElementById('forfaitAstreinteCheck').checked = bon.forfaitAstreinte || false;
+  document.getElementById('mainOeuvreAstreinteCheck').checked = bon.mainOeuvreAstreinte || false;
+  document.getElementById('mainOeuvreAstreinteQtyWrap').style.display = bon.mainOeuvreAstreinte ? 'flex' : 'none';
+  document.getElementById('mainOeuvreAstreinteQty').value = bon.mainOeuvreAstreinteQty || '';
   // Restaurer les photos — utilise l'URL Supabase si dispo, sinon base64 local
   photos = (bon.photos || []).map(p => {
     if (typeof p === 'string') return { src: p, url: null, name: '' };
@@ -1892,6 +1977,14 @@ function getBonCourant() {
     tracabilite:      document.getElementById('tracabiliteCheck').checked,
     tracabiliteQty:   document.getElementById('tracabiliteCheck').checked
                         ? document.getElementById('tracabiliteQty').value : '',
+    deplacement:      document.getElementById('deplacementCheck').checked,
+    mainOeuvre:       document.getElementById('mainOeuvreCheck').checked,
+    mainOeuvreQty:    document.getElementById('mainOeuvreCheck').checked
+                        ? document.getElementById('mainOeuvreQty').value : '',
+    forfaitAstreinte: document.getElementById('forfaitAstreinteCheck').checked,
+    mainOeuvreAstreinte: document.getElementById('mainOeuvreAstreinteCheck').checked,
+    mainOeuvreAstreinteQty: document.getElementById('mainOeuvreAstreinteCheck').checked
+                        ? document.getElementById('mainOeuvreAstreinteQty').value : '',
     articles:         getArticles(),
     signature:        sigData,
     nbPhotos:         photos.length
@@ -2149,38 +2242,69 @@ function generatePDF(bonData) {
   y += obsLines.length * 5 + 10;
 
   // ══════════════════════════════════════════════════════════
-  // TRAÇABILITÉ
+  // TRAÇABILITÉ & PRESTATIONS
   // ══════════════════════════════════════════════════════════
-  if (bon.tracabilite) {
-    checkPage(12);
-    doc.setFillColor(255, 245, 230);
-    doc.rect(ML, y, CW, 10, 'F');
-    doc.setDrawColor(...ORANGE);
+
+  // Fonction helper pour dessiner une ligne de case cochée/non cochée
+  function drawCheckLine(label, checked, qty, x, yy, rowH) {
+    // Case à cocher
+    doc.setDrawColor(...DARK);
     doc.setLineWidth(0.4);
-    doc.rect(ML, y, CW, 10, 'S');
-    doc.setLineWidth(0.2);
-    // Case à cocher ✓
-    doc.setFillColor(...ORANGE);
-    doc.rect(ML + 3, y + 2.5, 5, 5, 'F');
-    doc.setTextColor(255,255,255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8);
-    doc.text('\u2713', ML + 4, y + 6.5);
-    // Texte
-    doc.setTextColor(...DARK);
-    doc.setFont('helvetica', 'bold');
+    doc.rect(x, yy + (rowH - 4) / 2, 4, 4, 'S');
+    if (checked) {
+      doc.setFillColor(...ORANGE);
+      doc.rect(x, yy + (rowH - 4) / 2, 4, 4, 'F');
+      doc.setTextColor(255,255,255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7);
+      doc.text('✓', x + 0.6, yy + (rowH - 4) / 2 + 3.2);
+    }
+    // Label
+    doc.setFont('helvetica', checked ? 'bold' : 'normal');
     doc.setFontSize(9);
-    doc.text('Tra\u00e7abilit\u00e9', ML + 12, y + 6.5);
-    if (bon.tracabiliteQty) {
+    doc.setTextColor(checked ? ...DARK : ...GREY);
+    doc.text(label, x + 7, yy + rowH / 2 + 1.5);
+    // Quantité si applicable
+    if (checked && qty) {
+      const labelW = doc.getTextWidth(label);
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(...GREY);
-      doc.text('Quantit\u00e9 :', ML + 40, y + 6.5);
+      doc.text('Qté :', x + 7 + labelW + 3, yy + rowH / 2 + 1.5);
       doc.setFont('helvetica', 'bold');
       doc.setTextColor(...ORANGE);
-      doc.text(String(bon.tracabiliteQty), ML + 58, y + 6.5);
+      doc.text(String(qty), x + 7 + labelW + 16, yy + rowH / 2 + 1.5);
     }
-    y += 13;
   }
+
+  const checkItems = [
+    { label: 'Traçabilité requise', checked: bon.tracabilite,         qty: bon.tracabiliteQty },
+    { label: 'Déplacement',         checked: bon.deplacement,          qty: null },
+    { label: "Main-d'œuvre",        checked: bon.mainOeuvre,           qty: bon.mainOeuvreQty },
+    { label: 'Forfait astreinte',   checked: bon.forfaitAstreinte,     qty: null },
+    { label: "Main-d'œuvre astreinte", checked: bon.mainOeuvreAstreinte, qty: bon.mainOeuvreAstreinteQty },
+  ];
+
+  // Dessiner sur 2 colonnes
+  const colX1 = ML;
+  const colX2 = W / 2 + 5;
+  const rowH  = 8;
+  const col1  = checkItems.slice(0, 3);
+  const col2  = checkItems.slice(3);
+  const maxRows = Math.max(col1.length, col2.length);
+  checkPage(maxRows * rowH + 10);
+
+  doc.setFontSize(8.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(...DARK);
+  doc.text('Traçabilité & Prestations', ML, y);
+  doc.setLineWidth(0.3);
+  doc.setDrawColor(...ORANGE);
+  doc.line(ML, y + 1.5, ML + 70, y + 1.5);
+  y += 5;
+
+  col1.forEach((item, i) => drawCheckLine(item.label, item.checked, item.qty, colX1, y + i * rowH, rowH));
+  col2.forEach((item, i) => drawCheckLine(item.label, item.checked, item.qty, colX2, y + i * rowH, rowH));
+  y += maxRows * rowH + 5;
 
   // ══════════════════════════════════════════════════════════
   // NOTE PHOTOS
