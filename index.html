@@ -4,9 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Bon de Livraison</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://unpkg.com/@supabase/supabase-js@2.39.0/dist/umd/supabase.min.js"></script>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1a1a2e">
+<link rel="icon" href="icon-192.png">
+<script src="libs/xlsx.full.min.js"></script>
+<script src="libs/jspdf.umd.min.js"></script>
+<script src="libs/supabase.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
@@ -507,6 +510,18 @@
     margin-left: 6px;
   }
 
+  /* PASTILLE SYNCHRO */
+  .sync-pill {
+    display: inline-block;
+    background: #FEF3C7;
+    color: #92400E;
+    font-size: 0.68rem;
+    font-weight: 600;
+    padding: 1px 8px;
+    border-radius: 20px;
+    margin-left: 6px;
+  }
+
   /* TOAST */
   .toast {
     position: fixed;
@@ -676,7 +691,7 @@
   </div>
   <div style="display:flex;align-items:center;gap:8px">
     <span id="sync-status" style="display:none;font-size:0.7rem;font-weight:600;padding:3px 10px;border-radius:20px;color:white;background:#2563EB"></span>
-    <button onclick="loadFromSupabase()" title="Reconnecter" style="background:rgba(255,255,255,0.2);border:none;border-radius:8px;padding:0 10px;height:32px;cursor:pointer;font-size:1rem;color:white">🔄</button>
+    <button onclick="syncAll(true)" title="Reconnecter" style="background:rgba(255,255,255,0.2);border:none;border-radius:8px;padding:0 10px;height:32px;cursor:pointer;font-size:1rem;color:white">🔄</button>
     <button class="btn-new" onclick="switchTab('nouveau')">+ Nouveau BL</button>
   </div>
 </div>
@@ -984,83 +999,347 @@ try {
 }
 
 // ============================================================
-// ÉTAT LOCAL (cache + fallback offline)
+// STOCKAGE LOCAL — IndexedDB (fonctionne sans réseau, sans limite de 5 Mo)
 // ============================================================
-let bons = JSON.parse(localStorage.getItem('bl_bons') || '[]');
-let catalogue = JSON.parse(localStorage.getItem('bl_catalogue') || '[]');
-let photos = [];
-let editingIndex = -1;
-let supaReady = false;
+const IDB_NAME = 'blpf-db';
+let _idb = null;
 
-// ============================================================
-// SYNC SUPABASE — chargement initial
-// ============================================================
-async function loadFromSupabase() {
-  showSyncStatus('⏳ Synchronisation…', 'loading');
-
-  if (!supa) {
-    console.warn('Client Supabase non initialisé, mode local');
-    showSyncStatus('📴 Mode hors ligne', 'offline');
-    supaReady = false;
-    renderBonsList();
-    renderCatalogue();
-    initNewBon();
-    return;
-  }
-
-  try {
-    // Test rapide de connectivité avec timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s max
-
-    // Charger les bons
-    const { data: bonsData, error: bonsErr } = await supa
-      .from('bons')
-      .select('*')
-      .order('created_at', { ascending: false });
-    clearTimeout(timeoutId);
-
-    if (bonsErr) throw bonsErr;
-    bons = bonsData.map(row => ({ ...row.data, _supaId: row.id }));
-    localStorage.setItem('bl_bons', JSON.stringify(bons));
-
-    // Charger le catalogue
-    const { data: catData, error: catErr } = await supa
-      .from('catalogue')
-      .select('*')
-      .order('ref', { ascending: true });
-    if (catErr) throw catErr;
-    if (catData.length > 0) {
-      catalogue = catData.map(row => ({ ref: row.ref, des: row.des, pu: row.pu, _supaId: row.id }));
-      localStorage.setItem('bl_catalogue', JSON.stringify(catalogue));
-    }
-
-    supaReady = true;
-    showSyncStatus('✅ Synchronisé', 'ok');
-    renderBonsList();
-    renderCatalogue();
-    initNewBon();
-  } catch (err) {
-    console.warn('Supabase inaccessible:', err);
-    // Afficher le type d'erreur pour diagnostic
-    const msg = err && err.message ? err.message : String(err);
-    console.warn('Détail erreur:', msg);
-    showSyncStatus('📴 Mode hors ligne', 'offline');
-    supaReady = false;
-    renderBonsList();
-    renderCatalogue();
-    initNewBon();
-  }
+function idbOpen() {
+  if (_idb) return Promise.resolve(_idb);
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('bons')) db.createObjectStore('bons', { keyPath: 'lid' });
+      if (!db.objectStoreNames.contains('kv'))   db.createObjectStore('kv');
+    };
+    req.onsuccess = () => { _idb = req.result; resolve(_idb); };
+    req.onerror   = () => reject(req.error);
+  });
 }
 
+function idbTx(store, mode, fn) {
+  return idbOpen().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(store, mode);
+    let result;
+    const r = fn(tx.objectStore(store));
+    if (r && 'onsuccess' in r) r.onsuccess = () => { result = r.result; };
+    tx.oncomplete = () => resolve(result);
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  }));
+}
+
+const dbGetAllBons = ()  => idbTx('bons', 'readonly',  s => s.getAll());
+const dbPutBon     = b   => idbTx('bons', 'readwrite', s => s.put(b));
+const dbDelBon     = lid => idbTx('bons', 'readwrite', s => s.delete(lid));
+const kvGet        = k   => idbTx('kv',   'readonly',  s => s.get(k));
+const kvSet        = (k, v) => idbTx('kv', 'readwrite', s => s.put(v, k));
+
+function newLid() {
+  return (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+    : 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+}
+
+// ============================================================
+// ÉTAT
+// ============================================================
+let bons = [];
+let catalogue = [];
+let photos = [];
+let editingIndex = -1;
+let editingLid = null;
+let supaReady = false;          // true = dernière synchro réussie
+let syncing = false;
+let catalogueDirty = false;     // catalogue modifié localement, pas encore envoyé
+let pendingDeletes = [];        // ids Supabase de bons supprimés hors ligne
+let bonCounter = 0;             // dernier numéro APP-XXXX attribué
+
+const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
+
+function normalizeBon(b) {
+  if (!b.lid) b.lid = newLid();
+  if (!b._sync) b._sync = b._supaId ? 'synced' : 'pending';
+  b.photos = (b.photos || []).map((p, i) => {
+    if (typeof p === 'string') return { src: p, url: null, name: `${b.num || 'APP'}_photo_${String(i + 1).padStart(2, '0')}.jpg` };
+    return { src: p.src || p.url || '', url: p.url || null, name: p.name || `${b.num || 'APP'}_photo_${String(i + 1).padStart(2, '0')}.jpg` };
+  });
+  return b;
+}
+
+async function persistCatalogue() {
+  await kvSet('catalogue', catalogue);
+  await kvSet('catalogueDirty', catalogueDirty);
+}
+
+// Migration unique depuis l'ancien stockage (localStorage)
+async function migrateLegacy() {
+  try {
+    const raw = localStorage.getItem('bl_bons');
+    const rawCat = localStorage.getItem('bl_catalogue');
+    if (!raw && !rawCat) return;
+    const existing = await dbGetAllBons();
+    if (raw && !existing.length) {
+      for (const b of (JSON.parse(raw) || [])) {
+        b.lid = newLid();
+        b._sync = b._supaId ? 'synced' : 'pending';
+        await dbPutBon(normalizeBon(b));
+      }
+    }
+    if (rawCat && (await kvGet('catalogue')) === undefined) await kvSet('catalogue', JSON.parse(rawCat) || []);
+    localStorage.removeItem('bl_bons');
+    localStorage.removeItem('bl_catalogue');
+  } catch (e) { console.warn('Migration localStorage:', e); }
+}
+
+// ============================================================
+// SYNCHRO SUPABASE — file d'attente (bons + photos + catalogue)
+// ============================================================
+function pendingCount() {
+  return bons.filter(b => b._sync !== 'synced').length + pendingDeletes.length + (catalogueDirty ? 1 : 0);
+}
+
+function refreshSyncBadge() {
+  const n = pendingCount();
+  const online = navigator.onLine && supaReady;
+  if (online && n === 0) { showSyncStatus('✅ Synchronisé', 'ok'); return; }
+  if (online) { showSyncStatus(`⏳ ${n} à envoyer`, 'loading'); return; }
+  showSyncStatus(n ? `📴 Hors ligne · ${n} à envoyer` : '📴 Hors ligne', 'offline');
+}
+
+let _syncTimer = null;
 function showSyncStatus(msg, type) {
-  let el = document.getElementById('sync-status');
+  const el = document.getElementById('sync-status');
   if (!el) return;
+  clearTimeout(_syncTimer);
   el.textContent = msg;
   el.style.background = type === 'ok' ? '#16A34A' : type === 'loading' ? '#2563EB' : '#6B6B7B';
   el.style.display = 'block';
-  if (type === 'ok') setTimeout(() => { el.style.display = 'none'; }, 3000);
+  if (type === 'ok') _syncTimer = setTimeout(() => { el.style.display = 'none'; }, 3000);
 }
+
+async function uploadPhoto(num, p) {
+  if (!p.src || !p.src.startsWith('data:')) return p.url || null;
+  const blob = await (await fetch(p.src)).blob();
+  const path = `${num}/${p.name}`;
+  const { error } = await supa.storage.from('photos').upload(path, blob, { contentType: 'image/jpeg', upsert: true });
+  if (error) throw error;
+  return supa.storage.from('photos').getPublicUrl(path).data.publicUrl;
+}
+
+async function reverseGeocode(lat, lon) {
+  const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&accept-language=fr`;
+  // Délai maximum de 6 s : un réseau lent ne doit jamais bloquer la synchro
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 6000);
+  let res;
+  try { res = await fetch(url, { headers: { 'Accept-Language': 'fr' }, signal: ctl.signal }); }
+  finally { clearTimeout(t); }
+  if (!res.ok) throw new Error('geocode ' + res.status);
+  const data = await res.json();
+  const a = data.address || {};
+  const parts = [];
+  if (a.house_number && a.road) parts.push(`${a.house_number} ${a.road}`);
+  else if (a.road)              parts.push(a.road);
+  const ville = a.city || a.town || a.village;
+  if (a.postcode && ville) parts.push(`${a.postcode} ${ville}`);
+  else if (ville)          parts.push(ville);
+  return parts.join(', ') || data.display_name || null;
+}
+
+// Coordonnées GPS saisies hors ligne : "GPS 48.54000, 2.66000"
+function parseGpsText(s) {
+  const m = /^GPS\s+(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/.exec(s || '');
+  return m ? { lat: parseFloat(m[1]), lon: parseFloat(m[2]) } : null;
+}
+
+function serverPayload(b) {
+  const o = { ...b };
+  delete o.lid; delete o._supaId; delete o._sync;
+  o.photos = (b.photos || []).map(p => ({ url: p.url || null, name: p.name || '' }));
+  return o;
+}
+
+async function pushBon(b) {
+  // 1) photos pas encore envoyées
+  for (const p of b.photos) {
+    if (!p.url) p.url = await uploadPhoto(b.num, p);
+  }
+  // 2) adresse GPS différée → vraie adresse dès que le réseau est là
+  const gps = parseGpsText(b.clientAdresse);
+  if (gps) {
+    try { const adr = await reverseGeocode(gps.lat, gps.lon); if (adr) b.clientAdresse = adr; } catch (e) {}
+  }
+  // 3) le bon lui-même
+  const payload = serverPayload(b);
+  let supaId = b._supaId;
+  if (supaId) {
+    const { data, error } = await supa.from('bons').update({ data: payload }).eq('id', supaId).select();
+    if (error) throw error;
+    if (!data || !data.length) supaId = null;   // supprimé côté serveur → on le recrée
+  }
+  if (!supaId) {
+    const { data, error } = await supa.from('bons').insert({ data: payload }).select().single();
+    if (error) throw error;
+    supaId = data.id;
+  }
+  b._supaId = supaId;
+
+  // Si le bon a été modifié pendant l'envoi, la nouvelle version reste « à envoyer »
+  const cur = bons.find(x => x.lid === b.lid);
+  if (cur && cur !== b) {
+    if (!cur._supaId) cur._supaId = supaId;
+    await dbPutBon(cur);
+    return;
+  }
+  b._sync = 'synced';
+  await dbPutBon(b);
+}
+
+async function pushCatalogue() {
+  const items = catalogue.map(({ ref, des, pu }) => ({ ref, des, pu }));
+  const del = await supa.from('catalogue').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+  if (del.error) throw del.error;
+  for (let i = 0; i < items.length; i += 500) {
+    const { error } = await supa.from('catalogue').insert(items.slice(i, i + 500));
+    if (error) throw error;
+  }
+  catalogueDirty = false;
+  await persistCatalogue();
+}
+
+async function pullFromServer() {
+  const { data: rows, error } = await supa.from('bons').select('*').order('created_at', { ascending: true });
+  if (error) throw error;
+
+  let catRows = null;
+  if (!catalogueDirty) {
+    const r = await supa.from('catalogue').select('*').order('ref', { ascending: true });
+    if (r.error) throw r.error;
+    catRows = r.data;
+  }
+
+  // Assemblage synchrone (aucun await) pour ne pas écraser une sauvegarde faite pendant la synchro
+  const serverIds = new Set(rows.map(r => r.id));
+  const out = [];
+  const toPut = [];
+  const toDel = [];
+  const localBySupa = new Map();
+  for (const b of bons) {
+    if (b._supaId) localBySupa.set(b._supaId, b);
+    if (b._sync !== 'synced') { out.push(b); continue; }
+    if (b._supaId && !serverIds.has(b._supaId)) { toDel.push(b.lid); continue; }   // supprimé ailleurs
+    out.push(b);
+  }
+  const idx = new Map(out.map((b, i) => [b.lid, i]));
+  for (const row of rows) {
+    if (pendingDeletes.includes(row.id)) continue;
+    const local = localBySupa.get(row.id);
+    if (local && local._sync !== 'synced') continue;          // modification locale en attente
+    const merged = { ...row.data, _supaId: row.id, _sync: 'synced', lid: local ? local.lid : newLid() };
+    const lp = local ? local.photos || [] : [];
+    merged.photos = (merged.photos || []).map(p => {
+      const m = lp.find(x => x.name && x.name === p.name && x.src);
+      return { url: p.url || null, name: p.name || '', src: m ? m.src : (p.url || p.src || '') };
+    });
+    toPut.push(merged);
+    if (idx.has(merged.lid)) out[idx.get(merged.lid)] = merged; else out.push(merged);
+  }
+  out.sort(byDate);
+  bons = out;
+  if (editingLid) editingIndex = bons.findIndex(b => b.lid === editingLid);
+
+  if (catRows && catRows.length > 0) {
+    catalogue = catRows.map(r => ({ ref: r.ref, des: r.des, pu: r.pu }));
+    toPut.push({ __catalogue: true });
+  }
+
+  for (const lid of toDel) await dbDelBon(lid);
+  for (const b of toPut) {
+    if (b.__catalogue) await persistCatalogue(); else await dbPutBon(b);
+  }
+}
+
+async function syncAll(manual = false) {
+  if (syncing) return;
+  if (!supa) { supaReady = false; refreshSyncBadge(); if (manual) toast('⚠️ Connexion au serveur indisponible'); return; }
+  if (!navigator.onLine) { supaReady = false; refreshSyncBadge(); if (manual) toast('📴 Pas de réseau pour le moment'); return; }
+
+  syncing = true;
+  showSyncStatus('⏳ Synchronisation…', 'loading');
+  let failed = 0;
+  try {
+    // 1) suppressions faites hors ligne
+    for (const id of [...pendingDeletes]) {
+      const { error } = await supa.from('bons').delete().eq('id', id);
+      if (error) { failed++; continue; }
+      pendingDeletes = pendingDeletes.filter(x => x !== id);
+      await kvSet('pendingDeletes', pendingDeletes);
+    }
+    // 2) bons (et leurs photos) en attente
+    for (const b of bons.filter(x => x._sync !== 'synced')) {
+      try { await pushBon(b); }
+      catch (e) { console.warn('Envoi bon', b.num, e); failed++; }
+    }
+    // 3) catalogue modifié hors ligne
+    if (catalogueDirty) {
+      try { await pushCatalogue(); } catch (e) { console.warn('Envoi catalogue', e); failed++; }
+    }
+    // 4) récupérer l'état du serveur
+    await pullFromServer();
+    supaReady = true;
+  } catch (err) {
+    console.warn('Supabase inaccessible:', err);
+    supaReady = false;
+  } finally {
+    syncing = false;
+  }
+  renderBonsList();
+  renderCatalogue();
+  refreshSyncBadge();
+  if (manual) toast(supaReady && !pendingCount() ? '✅ Tout est synchronisé' : '⚠️ Synchro incomplète — réessayez');
+}
+
+// ============================================================
+// DÉMARRAGE de l'appli + PWA
+// ============================================================
+function registerSW() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    reg.addEventListener('updatefound', () => {
+      const nw = reg.installing;
+      if (nw) nw.addEventListener('statechange', () => {
+        if (nw.state === 'installed' && navigator.serviceWorker.controller) toast('🔄 Mise à jour prête — fermez puis rouvrez l\'appli');
+      });
+    });
+  }).catch(e => console.warn('Service worker:', e));
+}
+
+async function initApp() {
+  try {
+    await idbOpen();
+    await migrateLegacy();
+    bons = (await dbGetAllBons()).map(normalizeBon).sort(byDate);
+    catalogue = (await kvGet('catalogue')) || [];
+    catalogueDirty = !!(await kvGet('catalogueDirty'));
+    pendingDeletes = (await kvGet('pendingDeletes')) || [];
+    bonCounter = (await kvGet('counter')) || 0;
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+  } catch (e) {
+    console.error('IndexedDB indisponible:', e);
+    toast('⚠️ Stockage local indisponible');
+  }
+  renderBonsList();
+  renderCatalogue();
+  initNewBon();
+  refreshSyncBadge();
+  registerSW();
+  syncAll();
+}
+
+window.addEventListener('online',  () => syncAll());
+window.addEventListener('offline', () => { supaReady = false; refreshSyncBadge(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && pendingCount()) syncAll(); });
+setInterval(() => { if (navigator.onLine && pendingCount()) syncAll(); }, 60000);
 
 // ============================================================
 // TABS
@@ -1079,12 +1358,14 @@ function switchTab(name) {
 // BON NUMBER
 // ============================================================
 function nextBonNum() {
-  const n = bons.length + 1;
-  return 'PA-' + String(n).padStart(4, '0');
+  let max = 0;
+  bons.forEach(b => { const m = /^APP-(\d+)$/.exec(b.num || ''); if (m) max = Math.max(max, parseInt(m[1], 10)); });
+  return 'APP-' + String(Math.max(bonCounter, max) + 1).padStart(4, '0');
 }
 
 function initNewBon() {
   editingIndex = -1;
+  editingLid = null;
   document.getElementById('bon-num-display').textContent = nextBonNum();
   document.getElementById('dateIntervention').value = new Date().toISOString().split('T')[0];
   ['clientNom','clientAdresse','technicien','descIntervention','materielMarque',
@@ -1205,25 +1486,12 @@ function importCatalogue(e) {
       });
     });
 
-    showSyncStatus('📤 Import catalogue…', 'loading');
-    try {
-      if (supaReady) {
-        // Vider puis réinsérer
-        await supa.from('catalogue').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-        const { error } = await supa.from('catalogue').insert(newItems);
-        if (error) throw error;
-        showSyncStatus('✅ Catalogue synchronisé', 'ok');
-      } else {
-        showSyncStatus('📴 Catalogue local uniquement', 'offline');
-      }
-    } catch(err) {
-      console.error('Erreur import catalogue:', err);
-      showSyncStatus('📴 Catalogue local uniquement', 'offline');
-    }
     catalogue = newItems;
-    localStorage.setItem('bl_catalogue', JSON.stringify(catalogue));
+    catalogueDirty = true;
+    await persistCatalogue();
     renderCatalogue();
     toast(catalogue.length + ' articles chargés ✓');
+    syncAll();
   };
   reader.readAsBinaryString(file);
   e.target.value = '';
@@ -1424,21 +1692,12 @@ function exportCatalogueTemplate() {
 
 async function deleteAllCatalogue() {
   if (!confirm(`Supprimer les ${catalogue.length} article(s) du catalogue ?`)) return;
-  showSyncStatus('🗑️ Suppression…', 'loading');
-  try {
-    if (supa && supaReady) {
-      const { error } = await supa.from('catalogue').delete().neq('id', '00000000-0000-0000-0000-000000000000');
-      if (error) throw error;
-      showSyncStatus('✅ Catalogue vidé', 'ok');
-    }
-  } catch(err) {
-    console.error('Erreur suppression catalogue:', err);
-    showSyncStatus('📴 Supprimé localement', 'offline');
-  }
   catalogue = [];
-  localStorage.setItem('bl_catalogue', JSON.stringify(catalogue));
+  catalogueDirty = true;
+  await persistCatalogue();
   renderCatalogue();
   toast('Catalogue vidé ✓');
+  syncAll();
 }
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -1534,25 +1793,18 @@ function geolocateAddress() {
   btn.disabled = true;
   navigator.geolocation.getCurrentPosition(
     async pos => {
+      const { latitude: lat, longitude: lon } = pos.coords;
+      const field = document.getElementById('clientAdresse');
       try {
-        const { latitude: lat, longitude: lon } = pos.coords;
-        const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&accept-language=fr`;
-        const res = await fetch(url, { headers: { 'Accept-Language': 'fr' } });
-        const data = await res.json();
-        const a = data.address || {};
-        // Construire une adresse lisible
-        const parts = [];
-        if (a.house_number && a.road)      parts.push(`${a.house_number} ${a.road}`);
-        else if (a.road)                   parts.push(a.road);
-        if (a.postcode && a.city)          parts.push(`${a.postcode} ${a.city}`);
-        else if (a.postcode && a.town)     parts.push(`${a.postcode} ${a.town}`);
-        else if (a.postcode && a.village)  parts.push(`${a.postcode} ${a.village}`);
-        else if (a.city || a.town || a.village) parts.push(a.city || a.town || a.village);
-        const adresse = parts.join(', ') || data.display_name;
-        document.getElementById('clientAdresse').value = adresse;
+        if (!navigator.onLine) throw new Error('hors ligne');
+        const adresse = await reverseGeocode(lat, lon);
+        if (!adresse) throw new Error('adresse vide');
+        field.value = adresse;
         toast('📍 Adresse remplie');
-      } catch(e) {
-        toast('❌ Impossible de récupérer l\'adresse');
+      } catch (e) {
+        // Hors ligne : on garde les coordonnées, l'adresse sera complétée à la prochaine synchro
+        field.value = `GPS ${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+        toast('📍 Position enregistrée — adresse complétée dès le retour du réseau');
       }
       btn.textContent = '📍';
       btn.disabled = false;
@@ -1563,42 +1815,31 @@ function geolocateAddress() {
       btn.textContent = '📍';
       btn.disabled = false;
     },
-    { timeout: 10000, maximumAge: 0 }
+    { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
   );
 }
 
 function handlePhotos(e) {
   const files = Array.from(e.target.files);
-  const bonNum = document.getElementById('bon-num-display').textContent || 'PA-????';
+  const bonNum = document.getElementById('bon-num-display').textContent || 'APP-????';
   files.forEach(file => {
-    const photoIndex = photos.length + 1;
-    compressAndWatermark(file, 1200, 0.75, bonNum, photoIndex, async compressed => {
-      // Stocker en local d'abord pour affichage immédiat
-      const photoObj = { src: compressed, url: null, uploading: true, name: `${bonNum}_photo_${String(photoIndex).padStart(2,'0')}.jpg` };
+    let idx = photos.length + 1;
+    const mkName = n => `${bonNum}_photo_${String(n).padStart(2, '0')}.jpg`;
+    while (photos.some(p => p.name === mkName(idx))) idx++;
+    const name = mkName(idx);
+    compressAndWatermark(file, 1200, 0.75, bonNum, idx, compressed => {
+      const photoObj = { src: compressed, url: null, uploading: false, name };
       photos.push(photoObj);
       renderPhotoGrid();
-
-      // Upload vers Supabase Storage
-      if (supa && supaReady) {
-        try {
-          // Convertir base64 en blob
-          const res = await fetch(compressed);
-          const blob = await res.blob();
-          const path = `${bonNum}/${photoObj.name}`;
-          const { error } = await supa.storage.from('photos').upload(path, blob, { contentType: 'image/jpeg', upsert: true });
-          if (error) throw error;
-          // Récupérer l'URL publique
-          const { data } = supa.storage.from('photos').getPublicUrl(path);
-          photoObj.url = data.publicUrl;
-          photoObj.uploading = false;
-        } catch(err) {
-          console.error('Erreur upload photo:', err);
-          photoObj.uploading = false;
-        }
-      } else {
-        photoObj.uploading = false;
+      // Envoi immédiat si on a du réseau ; sinon la synchro s'en chargera plus tard
+      if (supa && navigator.onLine) {
+        photoObj.uploading = true;
+        renderPhotoGrid();
+        uploadPhoto(bonNum, photoObj)
+          .then(url => { photoObj.url = url; })
+          .catch(err => console.warn('Upload photo différé:', err))
+          .finally(() => { photoObj.uploading = false; renderPhotoGrid(); });
       }
-      renderPhotoGrid();
     });
   });
   e.target.value = '';
@@ -1644,9 +1885,9 @@ function renderPhotoGrid() {
 async function removePhoto(i) {
   const p = photos[i];
   // Supprimer de Supabase Storage si uploadée
-  if (supa && supaReady && p.url) {
+  if (supa && navigator.onLine && p.url) {
     try {
-      const bonNum = document.getElementById('bon-num-display').textContent || 'PA-????';
+      const bonNum = document.getElementById('bon-num-display').textContent || 'APP-????';
       await supa.storage.from('photos').remove([`${bonNum}/${p.name}`]);
     } catch(err) { console.error('Erreur suppression photo:', err); }
   }
@@ -1782,8 +2023,11 @@ async function saveBon() {
   if (!dateInt) { toast('⚠️ Veuillez saisir la date d\'intervention'); return; }
 
   const bon = {
-    num: editingIndex >= 0 ? bons[editingIndex].num : nextBonNum(),
-    date: new Date().toISOString(),
+    num: document.getElementById('bon-num-display').textContent || nextBonNum(),
+    date: editingIndex >= 0 ? (bons[editingIndex].date || new Date().toISOString()) : new Date().toISOString(),
+    lid: editingIndex >= 0 ? bons[editingIndex].lid : newLid(),
+    _supaId: editingIndex >= 0 ? (bons[editingIndex]._supaId || null) : null,
+    _sync: 'pending',
     clientNom,
     clientAdresse: document.getElementById('clientAdresse').value,
     dateIntervention: dateInt,
@@ -1813,54 +2057,26 @@ async function saveBon() {
     signature: sigData
   };
 
-  showSyncStatus('💾 Enregistrement…', 'loading');
-
+  const wasEditing = editingIndex >= 0;
+  if (wasEditing) bons[editingIndex] = bon; else bons.push(bon);
   try {
-    if (supaReady) {
-      if (editingIndex >= 0 && bons[editingIndex]._supaId) {
-        // Mise à jour
-        const { error } = await supa
-          .from('bons')
-          .update({ data: bon })
-          .eq('id', bons[editingIndex]._supaId);
-        if (error) throw error;
-        bon._supaId = bons[editingIndex]._supaId;
-        bons[editingIndex] = bon;
-      } else {
-        // Création
-        const { data, error } = await supa
-          .from('bons')
-          .insert({ data: bon })
-          .select()
-          .single();
-        if (error) throw error;
-        bon._supaId = data.id;
-        bons.push(bon);
-      }
-      showSyncStatus('✅ Synchronisé', 'ok');
-    } else {
-      // Mode hors ligne
-      if (editingIndex >= 0) bons[editingIndex] = bon;
-      else bons.push(bon);
-      showSyncStatus('📴 Sauvegardé localement', 'offline');
-    }
+    await dbPutBon(bon);
+    const m = /^APP-(\d+)$/.exec(bon.num);
+    if (m) { bonCounter = Math.max(bonCounter, parseInt(m[1], 10)); await kvSet('counter', bonCounter); }
   } catch (err) {
-    console.error('Erreur Supabase:', err);
-    if (editingIndex >= 0) bons[editingIndex] = bon;
-    else bons.push(bon);
-    showSyncStatus('📴 Sauvegardé localement', 'offline');
-    toast('⚠️ Hors ligne — sauvegardé en local');
+    console.error('Erreur stockage local:', err);
+    toast('⚠️ Erreur de stockage local');
   }
-
-  localStorage.setItem('bl_bons', JSON.stringify(bons));
-  toast(editingIndex >= 0 ? 'Bon modifié ✓' : 'Bon enregistré ✓');
+  toast(wasEditing ? 'Bon modifié ✓' : 'Bon enregistré ✓');
   initNewBon();
   switchTab('bons');
+  syncAll();   // envoi en arrière-plan (ou dès que le réseau revient)
 }
 
 function editBon(i) {
   const bon = bons[i];
   editingIndex = i;
+  editingLid = bon.lid;
   switchTab('nouveau');
   document.getElementById('bon-num-display').textContent = bon.num;
   document.getElementById('clientNom').value = bon.clientNom || '';
@@ -1912,18 +2128,20 @@ function editBon(i) {
 
 async function deleteBon(i) {
   if (!confirm('Supprimer ce bon de livraison ?')) return;
+  const b = bons[i];
+  bons.splice(i, 1);
   try {
-    if (supaReady && bons[i]._supaId) {
-      const { error } = await supa.from('bons').delete().eq('id', bons[i]._supaId);
-      if (error) throw error;
+    await dbDelBon(b.lid);
+    if (b._supaId) {
+      pendingDeletes.push(b._supaId);
+      await kvSet('pendingDeletes', pendingDeletes);
     }
   } catch (err) {
-    console.error('Erreur suppression Supabase:', err);
+    console.error('Erreur suppression locale:', err);
   }
-  bons.splice(i, 1);
-  localStorage.setItem('bl_bons', JSON.stringify(bons));
   renderBonsList();
   toast('Bon supprimé');
+  syncAll();
 }
 
 // ============================================================
@@ -1942,7 +2160,7 @@ function renderBonsList() {
       <div class="bon-info" onclick="editBon(${i})">
         <div class="bon-num">${b.num}</div>
         <div class="bon-client">${b.clientNom}<span class="badge">${b.naturePanne||'—'}</span></div>
-        <div class="bon-date">📅 ${d} &nbsp;|&nbsp; ${b.articles?.length||0} article(s)</div>
+        <div class="bon-date">📅 ${d} &nbsp;|&nbsp; ${b.articles?.length||0} article(s)${b._sync === 'synced' ? '' : ' <span class="sync-pill">⏳ à envoyer</span>'}</div>
       </div>
       <div class="bon-actions">
         <button class="btn-icon" onclick="generatePDFByIndex(${i})" title="Télécharger PDF">📄</button>
@@ -1958,7 +2176,7 @@ function renderBonsList() {
 // ============================================================
 function getBonCourant() {
   return {
-    num:              document.getElementById('bon-num-display').textContent || 'PA-????',
+    num:              document.getElementById('bon-num-display').textContent || 'APP-????',
     clientNom:        document.getElementById('clientNom').value,
     clientAdresse:    document.getElementById('clientAdresse').value,
     dateIntervention: document.getElementById('dateIntervention').value,
@@ -2523,8 +2741,7 @@ function toast(msg) {
 document.addEventListener('DOMContentLoaded', () => {
   initSignature();
   window.addEventListener('resize', () => { setupCanvas(); });
-  // Charge depuis Supabase (qui appellera renderBonsList, renderCatalogue, initNewBon)
-  loadFromSupabase();
+  initApp();
 });
 </script>
 </body>
