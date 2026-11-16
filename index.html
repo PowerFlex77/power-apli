@@ -370,6 +370,10 @@
   }
 
   .ref-col { font-family: 'IBM Plex Mono', monospace; color: var(--text2); font-size: 0.75rem; }
+  /* Colonne Désignation masquée dans le bon (la donnée reste enregistrée pour le PDF) */
+  .des-col { display: none; }
+  #articles-body .ref-col { width: 100%; }
+  #articles-body .ref-col input { min-width: 210px; font-size: 0.8rem; padding: 8px 6px; }
 
   .btn-add-row {
     margin-top: 10px;
@@ -823,7 +827,7 @@
         <thead>
           <tr>
             <th>Réf.</th>
-            <th>Désignation</th>
+            <th class="des-col">Désignation</th>
             <th>Qté</th>
             <th>P.U.</th>
             <th>Total</th>
@@ -1399,7 +1403,7 @@ function addArticleRow(ref='', des='', qty=1, pu='') {
   const tr = document.createElement('tr');
   tr.innerHTML = `
     <td class="ref-col"><input type="text" value="${ref}" placeholder="REF" oninput="updateTotals()"></td>
-    <td><input type="text" value="${des}" placeholder="Désignation" style="min-width:120px" oninput="updateTotals()"></td>
+    <td class="des-col"><input type="text" value="${des}" placeholder="Désignation" style="min-width:120px" oninput="updateTotals()"></td>
     <td><input type="number" value="${qty}" min="0" step="any" style="width:52px" oninput="updateTotals()"></td>
     <td><input type="number" value="${pu}" min="0" step="0.01" placeholder="0.00" style="width:70px" oninput="updateTotals()"></td>
     <td class="line-total">0,00</td>
