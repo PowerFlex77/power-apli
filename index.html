@@ -1057,6 +1057,22 @@ let syncing = false;
 let catalogueDirty = false;     // catalogue modifié localement, pas encore envoyé
 let pendingDeletes = [];        // ids Supabase de bons supprimés hors ligne
 let bonCounter = 0;             // dernier numéro APP-XXXX attribué
+let syncErrors = [];            // causes des derniers échecs de synchro
+
+function errMsg(e) {
+  if (!e) return 'erreur inconnue';
+  const parts = [e.message || e.error_description || (typeof e === 'string' ? e : '')];
+  if (e.details) parts.push(e.details);
+  if (e.hint) parts.push(e.hint);
+  if (e.statusCode) parts.push('(code ' + e.statusCode + ')');
+  const s = parts.filter(Boolean).join(' — ');
+  return s || JSON.stringify(e).slice(0, 200);
+}
+
+function showSyncErrors() {
+  if (syncErrors.length) alert('Dernières erreurs de synchro :\n\n' + syncErrors.join('\n\n'));
+  else toast('Aucune erreur de synchro');
+}
 
 const byDate = (a, b) => (a.date || '').localeCompare(b.date || '');
 
@@ -1106,6 +1122,7 @@ function refreshSyncBadge() {
   const n = pendingCount();
   const online = navigator.onLine && supaReady;
   if (online && n === 0) { showSyncStatus('✅ Synchronisé', 'ok'); return; }
+  if (online && syncErrors.length) { showSyncStatus(`⚠️ ${n} non envoyé(s) — touchez pour voir`, 'error'); return; }
   if (online) { showSyncStatus(`⏳ ${n} à envoyer`, 'loading'); return; }
   showSyncStatus(n ? `📴 Hors ligne · ${n} à envoyer` : '📴 Hors ligne', 'offline');
 }
@@ -1116,8 +1133,10 @@ function showSyncStatus(msg, type) {
   if (!el) return;
   clearTimeout(_syncTimer);
   el.textContent = msg;
-  el.style.background = type === 'ok' ? '#16A34A' : type === 'loading' ? '#2563EB' : '#6B6B7B';
+  el.style.background = type === 'ok' ? '#16A34A' : type === 'loading' ? '#2563EB' : type === 'error' ? '#DC2626' : '#6B6B7B';
   el.style.display = 'block';
+  el.style.cursor = 'pointer';
+  el.onclick = showSyncErrors;
   if (type === 'ok') _syncTimer = setTimeout(() => { el.style.display = 'none'; }, 3000);
 }
 
@@ -1164,9 +1183,13 @@ function serverPayload(b) {
 }
 
 async function pushBon(b) {
-  // 1) photos pas encore envoyées
+  // 1) photos pas encore envoyées (un échec n'empêche pas l'envoi du bon lui-même)
+  let photoErr = null;
   for (const p of b.photos) {
-    if (!p.url) p.url = await uploadPhoto(b.num, p);
+    if (!p.url) {
+      try { p.url = await uploadPhoto(b.num, p); }
+      catch (e) { photoErr = photoErr || new Error('Photo ' + p.name + ' : ' + errMsg(e)); }
+    }
   }
   // 2) adresse GPS différée → vraie adresse dès que le réseau est là
   const gps = parseGpsText(b.clientAdresse);
@@ -1193,8 +1216,10 @@ async function pushBon(b) {
   if (cur && cur !== b) {
     if (!cur._supaId) cur._supaId = supaId;
     await dbPutBon(cur);
+    if (photoErr) throw photoErr;
     return;
   }
+  if (photoErr) { await dbPutBon(b); throw photoErr; }   // le bon est en ligne, les photos restent à envoyer
   b._sync = 'synced';
   await dbPutBon(b);
 }
@@ -1271,28 +1296,30 @@ async function syncAll(manual = false) {
   syncing = true;
   showSyncStatus('⏳ Synchronisation…', 'loading');
   let failed = 0;
+  syncErrors = [];
   try {
     // 1) suppressions faites hors ligne
     for (const id of [...pendingDeletes]) {
       const { error } = await supa.from('bons').delete().eq('id', id);
-      if (error) { failed++; continue; }
+      if (error) { failed++; syncErrors.push('Suppression : ' + errMsg(error)); continue; }
       pendingDeletes = pendingDeletes.filter(x => x !== id);
       await kvSet('pendingDeletes', pendingDeletes);
     }
     // 2) bons (et leurs photos) en attente
     for (const b of bons.filter(x => x._sync !== 'synced')) {
       try { await pushBon(b); }
-      catch (e) { console.warn('Envoi bon', b.num, e); failed++; }
+      catch (e) { console.warn('Envoi bon', b.num, e); failed++; syncErrors.push(b.num + ' : ' + errMsg(e)); }
     }
     // 3) catalogue modifié hors ligne
     if (catalogueDirty) {
-      try { await pushCatalogue(); } catch (e) { console.warn('Envoi catalogue', e); failed++; }
+      try { await pushCatalogue(); } catch (e) { console.warn('Envoi catalogue', e); failed++; syncErrors.push('Catalogue : ' + errMsg(e)); }
     }
     // 4) récupérer l'état du serveur
     await pullFromServer();
     supaReady = true;
   } catch (err) {
     console.warn('Supabase inaccessible:', err);
+    syncErrors.push('Lecture serveur : ' + errMsg(err));
     supaReady = false;
   } finally {
     syncing = false;
@@ -1300,7 +1327,11 @@ async function syncAll(manual = false) {
   renderBonsList();
   renderCatalogue();
   refreshSyncBadge();
-  if (manual) toast(supaReady && !pendingCount() ? '✅ Tout est synchronisé' : '⚠️ Synchro incomplète — réessayez');
+  if (manual) {
+    if (supaReady && !pendingCount()) toast('✅ Tout est synchronisé');
+    else if (syncErrors.length) toast('⚠️ ' + syncErrors[0].slice(0, 110));
+    else toast('⚠️ Synchro incomplète — réessayez');
+  }
 }
 
 // ============================================================
