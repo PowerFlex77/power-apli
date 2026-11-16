@@ -6,7 +6,7 @@
 <title>Bon de Livraison</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.0/dist/umd/supabase.min.js"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2.39.0/dist/umd/supabase.min.js"></script>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
@@ -676,6 +676,7 @@
   </div>
   <div style="display:flex;align-items:center;gap:8px">
     <span id="sync-status" style="display:none;font-size:0.7rem;font-weight:600;padding:3px 10px;border-radius:20px;color:white;background:#2563EB"></span>
+    <button onclick="loadFromSupabase()" title="Reconnecter" style="background:rgba(255,255,255,0.2);border:none;border-radius:8px;padding:0 10px;height:32px;cursor:pointer;font-size:1rem;color:white">🔄</button>
     <button class="btn-new" onclick="switchTab('nouveau')">+ Nouveau BL</button>
   </div>
 </div>
@@ -1008,11 +1009,17 @@ async function loadFromSupabase() {
   }
 
   try {
+    // Test rapide de connectivité avec timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s max
+
     // Charger les bons
     const { data: bonsData, error: bonsErr } = await supa
       .from('bons')
       .select('*')
       .order('created_at', { ascending: false });
+    clearTimeout(timeoutId);
+
     if (bonsErr) throw bonsErr;
     bons = bonsData.map(row => ({ ...row.data, _supaId: row.id }));
     localStorage.setItem('bl_bons', JSON.stringify(bons));
@@ -1034,7 +1041,10 @@ async function loadFromSupabase() {
     renderCatalogue();
     initNewBon();
   } catch (err) {
-    console.warn('Supabase hors ligne, mode local activé', err);
+    console.warn('Supabase inaccessible:', err);
+    // Afficher le type d'erreur pour diagnostic
+    const msg = err && err.message ? err.message : String(err);
+    console.warn('Détail erreur:', msg);
     showSyncStatus('📴 Mode hors ligne', 'offline');
     supaReady = false;
     renderBonsList();
