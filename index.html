@@ -1236,16 +1236,26 @@ async function pushCatalogue() {
   await persistCatalogue();
 }
 
+// Supabase ne renvoie que 1000 lignes par requête : on lit par paquets jusqu'à tout avoir
+async function fetchAll(table, orderCols) {
+  const PAGE = 1000;
+  const all = [];
+  for (let from = 0; ; from += PAGE) {
+    let q = supa.from(table).select('*');
+    orderCols.forEach(c => { q = q.order(c, { ascending: true }); });
+    const { data, error } = await q.range(from, from + PAGE - 1);
+    if (error) throw error;
+    all.push(...data);
+    if (data.length < PAGE) break;
+  }
+  return all;
+}
+
 async function pullFromServer() {
-  const { data: rows, error } = await supa.from('bons').select('*').order('created_at', { ascending: true });
-  if (error) throw error;
+  const rows = await fetchAll('bons', ['created_at', 'id']);
 
   let catRows = null;
-  if (!catalogueDirty) {
-    const r = await supa.from('catalogue').select('*').order('ref', { ascending: true });
-    if (r.error) throw r.error;
-    catRows = r.data;
-  }
+  if (!catalogueDirty) catRows = await fetchAll('catalogue', ['ref', 'id']);
 
   // Assemblage synchrone (aucun await) pour ne pas écraser une sauvegarde faite pendant la synchro
   const serverIds = new Set(rows.map(r => r.id));
