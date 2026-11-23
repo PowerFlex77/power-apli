@@ -514,6 +514,24 @@
     margin-left: 6px;
   }
 
+  /* Quantité : assez large pour lire 4 chiffres et plus (ex. 1234,5) */
+  td.qty-col { min-width: 104px; }
+  td.qty-col input { width: 100%; min-width: 96px; font-size: 0.95rem; font-weight: 600; text-align: center; }
+
+  /* ARCHIVES */
+  .bons-filter { display: flex; gap: 8px; margin-bottom: 12px; }
+  .bons-filter button {
+    flex: 1; padding: 9px 10px; border-radius: 8px; border: 1.5px solid var(--border);
+    background: white; font-family: inherit; font-size: 0.82rem; font-weight: 600;
+    color: var(--text2); cursor: pointer;
+  }
+  .bons-filter button.on { background: var(--accent); border-color: var(--accent); color: white; }
+  .bon-card.archived { opacity: 0.85; border-left-color: #16A34A; }
+  .fact-pill {
+    display: inline-block; background: #DCFCE7; color: #166534; font-size: 0.68rem;
+    font-weight: 600; padding: 1px 8px; border-radius: 20px; margin-left: 6px;
+  }
+
   /* PASTILLE SYNCHRO */
   .sync-pill {
     display: inline-block;
@@ -1445,7 +1463,7 @@ function addArticleRow(ref='', des='', qty=1, pu='') {
   tr.innerHTML = `
     <td class="ref-col"><input type="text" value="${ref}" placeholder="REF" oninput="updateTotals()"></td>
     <td class="des-col"><input type="text" value="${des}" placeholder="Désignation" style="min-width:120px" oninput="updateTotals()"></td>
-    <td><input type="number" value="${qty}" min="0" step="any" style="width:52px" oninput="updateTotals()"></td>
+    <td class="qty-col"><input type="number" value="${qty}" min="0" step="any" inputmode="decimal" oninput="updateTotals()"></td>
     <td><input type="number" value="${pu}" min="0" step="0.01" placeholder="0.00" style="width:70px" oninput="updateTotals()"></td>
     <td class="line-total">0,00</td>
     <td><button class="del-row-btn" onclick="this.closest('tr').remove();updateTotals()">✕</button></td>
@@ -2071,6 +2089,8 @@ async function saveBon() {
     num: document.getElementById('bon-num-display').textContent || nextBonNum(),
     date: editingIndex >= 0 ? (bons[editingIndex].date || new Date().toISOString()) : new Date().toISOString(),
     lid: editingIndex >= 0 ? bons[editingIndex].lid : newLid(),
+    archive: editingIndex >= 0 ? !!bons[editingIndex].archive : false,
+    archiveDate: editingIndex >= 0 ? (bons[editingIndex].archiveDate || null) : null,
     _supaId: editingIndex >= 0 ? (bons[editingIndex]._supaId || null) : null,
     _sync: 'pending',
     clientNom,
@@ -2192,24 +2212,51 @@ async function deleteBon(i) {
 // ============================================================
 // RENDER BONS LIST
 // ============================================================
+let showArchives = false;
+
+function setBonsView(arch) { showArchives = arch; renderBonsList(); }
+
+async function toggleArchive(i) {
+  const b = bons[i];
+  if (!b) return;
+  b.archive = !b.archive;
+  b.archiveDate = b.archive ? new Date().toISOString() : null;
+  b._sync = 'pending';
+  try { await dbPutBon(b); } catch (e) { console.error('Archivage local:', e); }
+  renderBonsList();
+  toast(b.archive ? '🗃️ Bon archivé (facturé)' : '↩️ Bon remis dans les bons actifs');
+  syncAll();
+}
+
 function renderBonsList() {
   const div = document.getElementById('bons-list');
+  const nbAct = bons.filter(b => !b.archive).length;
+  const nbArc = bons.length - nbAct;
   if (!bons.length) {
     div.innerHTML = `<div class="empty-state"><div class="icon">📋</div><p>Aucun bon de livraison.<br>Créez votre premier bon !</p></div>`;
     return;
   }
-  div.innerHTML = [...bons].reverse().map((b, ri) => {
-    const i = bons.length - 1 - ri;
+  const bar = `<div class="bons-filter">
+      <button class="${showArchives ? '' : 'on'}" onclick="setBonsView(false)">📋 Actifs (${nbAct})</button>
+      <button class="${showArchives ? 'on' : ''}" onclick="setBonsView(true)">🗃️ Archivés (${nbArc})</button>
+    </div>`;
+  const list = [...bons].map((b, i) => ({ b, i })).filter(x => !!x.b.archive === showArchives).reverse();
+  if (!list.length) {
+    div.innerHTML = bar + `<div class="empty-state"><div class="icon">${showArchives ? '🗃️' : '📋'}</div><p>${showArchives ? 'Aucun bon archivé.<br>Archivez un bon une fois facturé.' : 'Aucun bon actif.'}</p></div>`;
+    return;
+  }
+  div.innerHTML = bar + list.map(({ b, i }) => {
     const d = b.dateIntervention ? new Date(b.dateIntervention).toLocaleDateString('fr-FR') : '—';
-    return `<div class="bon-card">
+    return `<div class="bon-card${b.archive ? ' archived' : ''}">
       <div class="bon-info" onclick="editBon(${i})">
         <div class="bon-num">${b.num}</div>
         <div class="bon-client">${b.clientNom}<span class="badge">${b.naturePanne||'—'}</span></div>
-        <div class="bon-date">📅 ${d} &nbsp;|&nbsp; ${b.articles?.length||0} article(s)${b._sync === 'synced' ? '' : ' <span class="sync-pill">⏳ à envoyer</span>'}</div>
+        <div class="bon-date">📅 ${d} &nbsp;|&nbsp; ${b.articles?.length||0} article(s)${b.archive ? ' <span class="fact-pill">✅ Facturé</span>' : ''}${b._sync === 'synced' ? '' : ' <span class="sync-pill">⏳ à envoyer</span>'}</div>
       </div>
       <div class="bon-actions">
         <button class="btn-icon" onclick="generatePDFByIndex(${i})" title="Télécharger PDF">📄</button>
         <button class="btn-icon" onclick="openMailByIndex(${i})" title="Envoyer par mail" style="color:#16A34A">✉️</button>
+        <button class="btn-icon" onclick="toggleArchive(${i})" title="${b.archive ? 'Désarchiver' : 'Archiver (facturé)'}">${b.archive ? '↩️' : '🗃️'}</button>
         <button class="btn-icon" onclick="deleteBon(${i})" title="Supprimer" style="color:#cc3333">🗑️</button>
       </div>
     </div>`;
