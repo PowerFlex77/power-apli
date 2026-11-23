@@ -83,9 +83,9 @@
 
   .tab {
     flex: 1;
-    padding: 12px 6px;
+    padding: 12px 2px;
     text-align: center;
-    font-size: 0.78rem;
+    font-size: 0.72rem;
     font-weight: 500;
     color: var(--text2);
     cursor: pointer;
@@ -527,6 +527,27 @@
   }
   .bons-filter button.on { background: var(--accent); border-color: var(--accent); color: white; }
   .bon-card.archived { opacity: 0.85; border-left-color: #16A34A; }
+  .bon-card { flex-wrap: wrap; }
+  .bon-card .bon-info { flex: 1; min-width: 0; }
+  .bon-cta {
+    width: 100%; margin-top: 10px; padding: 10px; border: none; border-radius: 8px;
+    font-family: inherit; font-size: 0.88rem; font-weight: 700; color: white; cursor: pointer;
+  }
+  .bon-cta.val { background: #2563EB; }
+  .bon-cta.fact { background: #16A34A; }
+  .tab-count {
+    display: inline-block; background: var(--accent); color: white; border-radius: 10px;
+    font-size: 0.66rem; font-weight: 700; padding: 1px 6px; margin-left: 4px; vertical-align: middle;
+  }
+  .tab-count:empty { display: none; }
+  .afact-total {
+    background: #EFF6FF; color: #1E3A8A; border-radius: 8px; padding: 10px 14px;
+    font-size: 0.85rem; font-weight: 600; margin-bottom: 12px; display: flex; justify-content: space-between;
+  }
+  .val-pill {
+    display: inline-block; background: #DBEAFE; color: #1E40AF; font-size: 0.68rem;
+    font-weight: 600; padding: 1px 8px; border-radius: 20px; margin-left: 6px;
+  }
   .fact-pill {
     display: inline-block; background: #DCFCE7; color: #166534; font-size: 0.68rem;
     font-weight: 600; padding: 1px 8px; border-radius: 20px; margin-left: 6px;
@@ -721,6 +742,7 @@
 <div class="tabs">
   <div class="tab active" onclick="switchTab('bons')" id="tab-bons">📋 Bons</div>
   <div class="tab" onclick="switchTab('nouveau')" id="tab-nouveau">✏️ Nouveau</div>
+  <div class="tab" onclick="switchTab('afacturer')" id="tab-afacturer">💶 À facturer<span id="afact-count" class="tab-count"></span></div>
   <div class="tab" onclick="switchTab('articles')" id="tab-articles">📦 Articles</div>
 </div>
 
@@ -982,6 +1004,11 @@
   <button class="btn-generate" style="background:#16A34A;margin-top:8px" onclick="openMailApp()">
     ✉️ &nbsp; Envoyer par mail
   </button>
+</div>
+
+<!-- PAGE: À FACTURER -->
+<div class="page" id="page-afacturer">
+  <div id="afacturer-list"></div>
 </div>
 
 <!-- PAGE: CATALOGUE ARTICLES -->
@@ -1413,6 +1440,7 @@ function switchTab(name) {
   document.getElementById('page-' + name).classList.add('active');
   document.getElementById('tab-' + name).classList.add('active');
   if (name === 'bons')     renderBonsList();
+  if (name === 'afacturer') renderAFacturer();
   if (name === 'articles') renderCatalogue();
   if (name === 'nouveau')  requestAnimationFrame(() => setupCanvas());
 }
@@ -2089,7 +2117,8 @@ async function saveBon() {
     num: document.getElementById('bon-num-display').textContent || nextBonNum(),
     date: editingIndex >= 0 ? (bons[editingIndex].date || new Date().toISOString()) : new Date().toISOString(),
     lid: editingIndex >= 0 ? bons[editingIndex].lid : newLid(),
-    archive: editingIndex >= 0 ? !!bons[editingIndex].archive : false,
+    statut: editingIndex >= 0 ? statutOf(bons[editingIndex]) : 'actif',
+    valideDate: editingIndex >= 0 ? (bons[editingIndex].valideDate || null) : null,
     archiveDate: editingIndex >= 0 ? (bons[editingIndex].archiveDate || null) : null,
     _supaId: editingIndex >= 0 ? (bons[editingIndex]._supaId || null) : null,
     _sync: 'pending',
@@ -2214,53 +2243,115 @@ async function deleteBon(i) {
 // ============================================================
 let showArchives = false;
 
+// Circuit d'un bon : 'actif' (en cours) → 'afacturer' (chiffrage validé) → 'archive' (facturé)
+const statutOf = b => b.statut || (b.archive ? 'archive' : 'actif');
+
+function bonTotal(b) {
+  return (b.articles || []).reduce((s, a) => s + (parseFloat(a.qty) || 0) * (parseFloat(a.pu) || 0), 0);
+}
+const fmtEur = n => n.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+
 function setBonsView(arch) { showArchives = arch; renderBonsList(); }
 
-async function toggleArchive(i) {
+async function setStatut(i, statut, msg) {
   const b = bons[i];
   if (!b) return;
-  b.archive = !b.archive;
-  b.archiveDate = b.archive ? new Date().toISOString() : null;
+  b.statut = statut;
+  delete b.archive;
+  if (statut === 'afacturer') b.valideDate = new Date().toISOString();
+  if (statut === 'archive')   b.archiveDate = new Date().toISOString();
   b._sync = 'pending';
-  try { await dbPutBon(b); } catch (e) { console.error('Archivage local:', e); }
+  try { await dbPutBon(b); } catch (e) { console.error('Changement de statut local:', e); }
   renderBonsList();
-  toast(b.archive ? '🗃️ Bon archivé (facturé)' : '↩️ Bon remis dans les bons actifs');
+  renderAFacturer();
+  toast(msg);
   syncAll();
+}
+
+function validerChiffrage(i) {
+  if (!confirm('Valider le chiffrage de ' + bons[i].num + ' ?\nIl passera dans l\'onglet « À facturer ».')) return;
+  setStatut(i, 'afacturer', '✅ Chiffrage validé — bon dans « À facturer »');
+}
+function marquerFacture(i) {
+  if (!confirm(bons[i].num + ' est facturé ?\nIl sera archivé.')) return;
+  setStatut(i, 'archive', '🗃️ Bon facturé et archivé');
+}
+const retourEnCours = i => setStatut(i, 'actif', '↩️ Bon remis en cours');
+const retourAFacturer = i => setStatut(i, 'afacturer', '↩️ Bon remis dans « À facturer »');
+
+function bonCardHtml(b, i, mode) {
+  const d = b.dateIntervention ? new Date(b.dateIntervention).toLocaleDateString('fr-FR') : '—';
+  const pills =
+    (mode === 'afacturer' ? ` <span class="val-pill">💶 ${fmtEur(bonTotal(b))} HT</span>` : '') +
+    (mode === 'archive' ? ' <span class="fact-pill">✅ Facturé</span>' : '') +
+    (b._sync === 'synced' ? '' : ' <span class="sync-pill">⏳ à envoyer</span>');
+  const back = mode === 'afacturer'
+    ? `<button class="btn-icon" onclick="retourEnCours(${i})" title="Remettre en cours (corriger le chiffrage)">↩️</button>`
+    : mode === 'archive'
+      ? `<button class="btn-icon" onclick="retourAFacturer(${i})" title="Remettre dans À facturer">↩️</button>`
+      : '';
+  const cta = mode === 'actif'
+    ? `<button class="bon-cta val" onclick="validerChiffrage(${i})">✅ Valider le chiffrage</button>`
+    : mode === 'afacturer'
+      ? `<button class="bon-cta fact" onclick="marquerFacture(${i})">🗃️ Facturé — archiver</button>`
+      : '';
+  return `<div class="bon-card${mode === 'archive' ? ' archived' : ''}">
+      <div class="bon-info" onclick="editBon(${i})">
+        <div class="bon-num">${b.num}</div>
+        <div class="bon-client">${b.clientNom}<span class="badge">${b.naturePanne||'—'}</span></div>
+        <div class="bon-date">📅 ${d} &nbsp;|&nbsp; ${b.articles?.length||0} article(s)${pills}</div>
+      </div>
+      <div class="bon-actions">
+        <button class="btn-icon" onclick="generatePDFByIndex(${i})" title="Télécharger PDF">📄</button>
+        <button class="btn-icon" onclick="openMailByIndex(${i})" title="Envoyer par mail" style="color:#16A34A">✉️</button>
+        ${back}
+        <button class="btn-icon" onclick="deleteBon(${i})" title="Supprimer" style="color:#cc3333">🗑️</button>
+      </div>
+      ${cta}
+    </div>`;
+}
+
+function updateAFactCount() {
+  const el = document.getElementById('afact-count');
+  if (!el) return;
+  const n = bons.filter(b => statutOf(b) === 'afacturer').length;
+  el.textContent = n ? n : '';
 }
 
 function renderBonsList() {
   const div = document.getElementById('bons-list');
-  const nbAct = bons.filter(b => !b.archive).length;
-  const nbArc = bons.length - nbAct;
+  renderAFacturer();   // garde l'onglet « À facturer » et son compteur à jour
+  const nbAct = bons.filter(b => statutOf(b) === 'actif').length;
+  const nbArc = bons.filter(b => statutOf(b) === 'archive').length;
   if (!bons.length) {
     div.innerHTML = `<div class="empty-state"><div class="icon">📋</div><p>Aucun bon de livraison.<br>Créez votre premier bon !</p></div>`;
     return;
   }
   const bar = `<div class="bons-filter">
-      <button class="${showArchives ? '' : 'on'}" onclick="setBonsView(false)">📋 Actifs (${nbAct})</button>
+      <button class="${showArchives ? '' : 'on'}" onclick="setBonsView(false)">📋 En cours (${nbAct})</button>
       <button class="${showArchives ? 'on' : ''}" onclick="setBonsView(true)">🗃️ Archivés (${nbArc})</button>
     </div>`;
-  const list = [...bons].map((b, i) => ({ b, i })).filter(x => !!x.b.archive === showArchives).reverse();
+  const want = showArchives ? 'archive' : 'actif';
+  const list = bons.map((b, i) => ({ b, i })).filter(x => statutOf(x.b) === want).reverse();
   if (!list.length) {
-    div.innerHTML = bar + `<div class="empty-state"><div class="icon">${showArchives ? '🗃️' : '📋'}</div><p>${showArchives ? 'Aucun bon archivé.<br>Archivez un bon une fois facturé.' : 'Aucun bon actif.'}</p></div>`;
+    div.innerHTML = bar + `<div class="empty-state"><div class="icon">${showArchives ? '🗃️' : '📋'}</div><p>${showArchives ? 'Aucun bon archivé.<br>Les bons facturés arrivent ici.' : 'Aucun bon en cours.'}</p></div>`;
     return;
   }
-  div.innerHTML = bar + list.map(({ b, i }) => {
-    const d = b.dateIntervention ? new Date(b.dateIntervention).toLocaleDateString('fr-FR') : '—';
-    return `<div class="bon-card${b.archive ? ' archived' : ''}">
-      <div class="bon-info" onclick="editBon(${i})">
-        <div class="bon-num">${b.num}</div>
-        <div class="bon-client">${b.clientNom}<span class="badge">${b.naturePanne||'—'}</span></div>
-        <div class="bon-date">📅 ${d} &nbsp;|&nbsp; ${b.articles?.length||0} article(s)${b.archive ? ' <span class="fact-pill">✅ Facturé</span>' : ''}${b._sync === 'synced' ? '' : ' <span class="sync-pill">⏳ à envoyer</span>'}</div>
-      </div>
-      <div class="bon-actions">
-        <button class="btn-icon" onclick="generatePDFByIndex(${i})" title="Télécharger PDF">📄</button>
-        <button class="btn-icon" onclick="openMailByIndex(${i})" title="Envoyer par mail" style="color:#16A34A">✉️</button>
-        <button class="btn-icon" onclick="toggleArchive(${i})" title="${b.archive ? 'Désarchiver' : 'Archiver (facturé)'}">${b.archive ? '↩️' : '🗃️'}</button>
-        <button class="btn-icon" onclick="deleteBon(${i})" title="Supprimer" style="color:#cc3333">🗑️</button>
-      </div>
-    </div>`;
-  }).join('');
+  div.innerHTML = bar + list.map(({ b, i }) => bonCardHtml(b, i, want)).join('');
+}
+
+function renderAFacturer() {
+  updateAFactCount();
+  const div = document.getElementById('afacturer-list');
+  if (!div) return;
+  const list = bons.map((b, i) => ({ b, i })).filter(x => statutOf(x.b) === 'afacturer').reverse();
+  if (!list.length) {
+    div.innerHTML = `<div class="empty-state"><div class="icon">💶</div><p>Aucun bon à facturer.<br>Validez le chiffrage d'un bon pour qu'il arrive ici.</p></div>`;
+    return;
+  }
+  const total = list.reduce((s, x) => s + bonTotal(x.b), 0);
+  div.innerHTML = `<div class="afact-total"><span>${list.length} bon(s) à facturer</span><span>${fmtEur(total)} HT</span></div>` +
+    list.map(({ b, i }) => bonCardHtml(b, i, 'afacturer')).join('');
 }
 
 // ============================================================
