@@ -2557,9 +2557,11 @@ function __buildPdfC(bon, LOGO){ const v='C';
       let yEnd=y;
       for(let c=0;c<nCols;c++){
         let yy=yA;const x=M+c*(colW+GAP);
-        arts.slice(c*ROWS,(c+1)*ROWS).forEach(a=>{
+        const colArts=arts.slice(c*ROWS,(c+1)*ROWS);
+        F(9);let refW=0;colArts.forEach(a=>{doc.splitTextToSize(txt(a.ref),colW-16).forEach(l=>{refW=Math.max(refW,doc.getTextWidth(l));});});
+        colArts.forEach(a=>{
           F(9);const r=doc.splitTextToSize(txt(a.ref),colW-16);
-          doc.text(r,x,yy);F(9,'bold');doc.text(String(a.qty??''),x+colW,yy,{align:'right'});
+          doc.text(r,x,yy);F(9,'bold');doc.text(String(a.qty??''),x+refW+4,yy);
           yy+=r.length*L(9)+0.9;doc.setDrawColor(220);doc.setLineWidth(0.1);doc.line(x,yy-L(9)+1.5,x+colW,yy-L(9)+1.5);yy+=0.5;
         });
         yEnd=Math.max(yEnd,yy);
